@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.env
+*.log
+coverage/
+src/generated/
+
+/src/generated/prisma
+
+# Service-account keys and other credentials (see docs/FIREBASE_SETUP.md)
+secrets/
+*service-account*.json
+
+# Uploaded files (expense receipts) when using local disk storage (UPLOAD_DIR)
+uploads/
+
+# Build cache
+*.tsbuildinfo
+
+# Third-party reference project (nestbeacon chat), not part of this codebase
+in-app chat resource/

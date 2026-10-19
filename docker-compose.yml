@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: travelgo
+      POSTGRES_PASSWORD: travelgo
+      POSTGRES_DB: travelgo
+    ports:
+      - '5432:5432'
+    volumes:
+      - travelgo_postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - travelgo_redis_data:/data
+
+  # The containerized app itself — this is what gets built once and shipped anywhere.
+  # Not part of the day-to-day dev loop (that's still `npm run start:dev` on the host
+  # for hot reload); use this to confirm the actual production artifact works before
+  # pushing it to a registry. Postgres/Redis are reached by service name here, not
+  # localhost — containers on the same compose network resolve each other by service name.
+  api:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://travelgo:travelgo@postgres:5432/travelgo?schema=public
+      REDIS_URL: redis://redis:6379
+    ports:
+      - '3000:3000'
+    volumes:
+      - travelgo_uploads:/app/uploads # receipts + feedback screenshots survive rebuilds
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  travelgo_postgres_data:
+  travelgo_redis_data:
+  travelgo_uploads:

@@ -1,0 +1,1215 @@
+###############################################################################
+# TravelGo API — manual test script
+#
+# How to use (VS Code):
+#   1. Install the "REST Client" extension (humao.rest-client).
+#   2. Start the API:  npm run start:dev   (in backend/)
+#   3. Click "Send Request" above each request, top to bottom.
+#
+# OTP / verification / reset codes are NOT emailed or texted yet — they're printed
+# in the server terminal as:  [DEV OTP] Email to alice@example.com: 123456
+# Paste them into the @...Code variables below when a step says so.
+#
+# Tokens and ids are picked up automatically from earlier responses
+# ({{name.response.body...}}), so run the requests in order.
+#
+# Re-running from scratch? Change the users below (or the signup returns 409).
+###############################################################################
+
+@baseUrl = http://localhost:3000
+@password = Str0ng!Pass
+
+# Alice — creates the group (admin)
+@aliceEmail = alice@example.com
+@alicePhone = +919812345601
+@aliceUsername = alice_r
+
+# Bob — gets added / invited (viewer)
+@bobEmail = bob@example.com
+@bobPhone = +919812345602
+@bobUsername = bob_k
+
+# Paste codes from the server terminal here when asked:
+@aliceSignupCode = 000000
+@bobSignupCode = 000000
+@bobLoginOtp = 000000
+@bobResetCode = 000000
+
+
+###############################################################################
+# 0. HEALTH
+###############################################################################
+
+### Health check — expect {"status":"ok","db":"connected"}
+GET {{baseUrl}}/health
+
+
+###############################################################################
+# 1. AUTH — signup & verify
+###############################################################################
+
+### Username availability — expect available: true
+GET {{baseUrl}}/auth/username-available?username={{aliceUsername}}
+
+### Username rules — expect 400 (too short)
+GET {{baseUrl}}/auth/username-available?username=ab
+
+### Signup with a weak password — expect 400 with the password rules
+POST {{baseUrl}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "weak@example.com",
+  "username": "weak_user",
+  "password": "password1",
+  "name": "Weak"
+}
+
+### Sign up Alice — expect 201 { userId, message }. Then copy her code from the server terminal into @aliceSignupCode
+# @name aliceSignup
+POST {{baseUrl}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "{{aliceEmail}}",
+  "phone": "{{alicePhone}}",
+  "username": "{{aliceUsername}}",
+  "password": "{{password}}",
+  "name": "Alice Rider"
+}
+
+### Login before verifying — expect 401 "Account not verified"
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "identifier": "{{aliceEmail}}",
+  "password": "{{password}}"
+}
+
+### Lost the code? Resend it (at most once per 60 s; same answer whether or not the account exists)
+# Run right after signup, this is inside the 60 s cooldown, so nothing new is sent. Wait a minute to see a new code.
+POST {{baseUrl}}/auth/resend-verification
+Content-Type: application/json
+
+{
+  "email": "{{aliceEmail}}"
+}
+
+### Verify Alice (needs @aliceSignupCode) — expect 201 { accessToken, refreshToken }
+POST {{baseUrl}}/auth/verify
+Content-Type: application/json
+
+{
+  "userId": "{{aliceSignup.response.body.userId}}",
+  "code": "{{aliceSignupCode}}"
+}
+
+### Sign up Bob — copy his code into @bobSignupCode
+# @name bobSignup
+POST {{baseUrl}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "{{bobEmail}}",
+  "phone": "{{bobPhone}}",
+  "username": "{{bobUsername}}",
+  "password": "{{password}}",
+  "name": "Bob Kumar"
+}
+
+### Verify Bob (needs @bobSignupCode)
+POST {{baseUrl}}/auth/verify
+Content-Type: application/json
+
+{
+  "userId": "{{bobSignup.response.body.userId}}",
+  "code": "{{bobSignupCode}}"
+}
+
+### Duplicate username (different case) — expect 409 "Username is already taken"
+POST {{baseUrl}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "someone.else@example.com",
+  "username": "ALICE_R",
+  "password": "{{password}}",
+  "name": "Copycat"
+}
+
+
+###############################################################################
+# 2. AUTH — login, profile, tokens
+###############################################################################
+
+### Log Alice in by USERNAME (any case works) — expect 201 tokens
+# @name aliceLogin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "identifier": "Alice_R",
+  "password": "{{password}}",
+  "rememberMe": true
+}
+
+### Log Bob in by EMAIL
+# @name bobLogin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "identifier": "{{bobEmail}}",
+  "password": "{{password}}"
+}
+
+### Wrong password — expect 401
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "identifier": "{{bobPhone}}",
+  "password": "Wr0ng!Pass"
+}
+
+### My profile (Alice)
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{aliceLogin.response.body.accessToken}}
+
+### No token — expect 401
+GET {{baseUrl}}/auth/me
+
+### Update profile (name/avatar; username can change too)
+PATCH {{baseUrl}}/auth/me
+Authorization: Bearer {{aliceLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Alice R.",
+  "avatarUrl": "https://example.com/avatars/alice.jpg"
+}
+
+### Upload a profile picture — expect 200, profile with avatarUrl = …/users/<id>/avatar?v=…
+# Point the `<` line at any JPEG/PNG/WebP ≤ 5 MB on your computer.
+# @name aliceAvatar
+POST {{baseUrl}}/auth/me/avatar
+Authorization: Bearer {{aliceLogin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=AvatarBoundary
+
+--AvatarBoundary
+Content-Disposition: form-data; name="file"; filename="me.jpg"
+Content-Type: image/jpeg
+
+< ./cover.jpg
+--AvatarBoundary--
+
+### Load the picture — no token needed
+GET {{aliceAvatar.response.body.avatarUrl}}
+
+### Remove the profile picture — expect 200, avatarUrl: null
+DELETE {{baseUrl}}/auth/me/avatar
+Authorization: Bearer {{aliceLogin.response.body.accessToken}}
+
+### Try to take Alice's username as Bob — expect 409
+PATCH {{baseUrl}}/auth/me
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "username": "{{aliceUsername}}"
+}
+
+### Refresh Alice's tokens — expect a NEW pair. (The old refresh token stops working.)
+# @name aliceRefresh
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{aliceLogin.response.body.refreshToken}}"
+}
+
+### Re-use the OLD refresh token — expect 401 "revoked"
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{aliceLogin.response.body.refreshToken}}"
+}
+
+
+###############################################################################
+# 3. GROUPS — create, view, edit
+# From here on Alice uses the token from the refresh above.
+###############################################################################
+
+### Create a group as Alice — expect 201, myRole ADMIN, memberCount 1
+# @name createGroup
+POST {{baseUrl}}/groups
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Ladakh Ride 2026",
+  "description": "Manali → Leh → Pangong, 9 riders",
+  "tripStart": "2026-10-10T00:00:00Z",
+  "tripEnd": "2026-10-19T00:00:00Z"
+}
+
+@groupId = {{createGroup.response.body.id}}
+
+### Missing description — expect 400 (the end-before-start check only runs once every field is valid)
+POST {{baseUrl}}/groups
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Bad dates",
+  "tripStart": "2026-10-19T00:00:00Z",
+  "tripEnd": "2026-10-10T00:00:00Z"
+}
+
+### My groups (Alice)
+GET {{baseUrl}}/groups
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Group details
+GET {{baseUrl}}/groups/{{groupId}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Bob isn't a member yet — expect 404 (private groups are hidden)
+GET {{baseUrl}}/groups/{{groupId}}
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Edit group (admin)
+PATCH {{baseUrl}}/groups/{{groupId}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "description": "Manali → Leh → Pangong → Nubra",
+  "tripEnd": "2026-10-20T00:00:00Z"
+}
+
+### Upload/replace the cover image (admin) — expect 200, group with coverImageUrl
+# Point the `<` line at any JPEG/PNG/WebP ≤ 5 MB on your computer.
+POST {{baseUrl}}/groups/{{groupId}}/cover-image
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=CoverBoundary
+
+--CoverBoundary
+Content-Disposition: form-data; name="file"; filename="cover.jpg"
+Content-Type: image/jpeg
+
+< ./cover.jpg
+--CoverBoundary--
+
+### Download the cover image (any member) — expect the image, 404 if none
+GET {{baseUrl}}/groups/{{groupId}}/cover-image
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Remove the cover image (admin) — expect 200, coverImageUrl: null
+DELETE {{baseUrl}}/groups/{{groupId}}/cover-image
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+
+###############################################################################
+# 4. MEMBERS — add directly, roles, remove
+###############################################################################
+
+### Add Bob directly by USERNAME — expect 201, role VIEWER
+# (also works with { "email": ... } or { "phone": ... })
+POST {{baseUrl}}/groups/{{groupId}}/members
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "username": "{{bobUsername}}"
+}
+
+### Add him again — expect 409 already a member
+POST {{baseUrl}}/groups/{{groupId}}/members
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "email": "{{bobEmail}}"
+}
+
+### Unknown user — expect 404
+POST {{baseUrl}}/groups/{{groupId}}/members
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "username": "nobody_here"
+}
+
+### Members list (Bob can see it now)
+GET {{baseUrl}}/groups/{{groupId}}/members
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Bob (viewer) tries to edit the group — expect 403
+PATCH {{baseUrl}}/groups/{{groupId}}
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Bob's trip now"
+}
+
+### Alice demotes herself while she's the only admin — expect 409
+PATCH {{baseUrl}}/groups/{{groupId}}/members/{{aliceSignup.response.body.userId}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "role": "VIEWER"
+}
+
+### Promote Bob to ADMIN
+PATCH {{baseUrl}}/groups/{{groupId}}/members/{{bobSignup.response.body.userId}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "role": "ADMIN"
+}
+
+### Demote Bob back to VIEWER
+PATCH {{baseUrl}}/groups/{{groupId}}/members/{{bobSignup.response.body.userId}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "role": "VIEWER"
+}
+
+### Bob leaves the group (DELETE with his own userId)
+DELETE {{baseUrl}}/groups/{{groupId}}/members/{{bobSignup.response.body.userId}}
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+
+###############################################################################
+# 5. INVITES — email/SMS invite with accept/reject
+###############################################################################
+
+### Invite Bob by EMAIL — expect 201. The server terminal shows "[DEV INVITE] Email to bob@..."
+# @name emailInvite
+POST {{baseUrl}}/groups/{{groupId}}/invites
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "channel": "EMAIL",
+  "email": "{{bobEmail}}",
+  "expiresInDays": 7
+}
+
+### Same person again while pending — expect 409
+POST {{baseUrl}}/groups/{{groupId}}/invites
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "channel": "EMAIL",
+  "email": "{{bobEmail}}"
+}
+
+### Pending invites for the group (admin)
+GET {{baseUrl}}/groups/{{groupId}}/invites
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Bob's pending invitations
+GET {{baseUrl}}/invites
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Bob rejects it
+POST {{baseUrl}}/invites/{{emailInvite.response.body.id}}/reject
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Accepting after rejecting — expect 409
+POST {{baseUrl}}/invites/{{emailInvite.response.body.id}}/accept
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Invite Bob again, this time by SMS
+# @name smsInvite
+POST {{baseUrl}}/groups/{{groupId}}/invites
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "channel": "SMS",
+  "phone": "{{bobPhone}}"
+}
+
+### Bob accepts — expect { groupId, status: "ACCEPTED" }; he's now a VIEWER
+POST {{baseUrl}}/invites/{{smsInvite.response.body.id}}/accept
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+
+###############################################################################
+# 6. INVITES — shareable link
+###############################################################################
+
+### Create a share link — the token is shown ONLY in this response
+# @name linkInvite
+POST {{baseUrl}}/groups/{{groupId}}/invites
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "channel": "LINK",
+  "expiresInDays": 3
+}
+
+### Preview the link (as Bob) — shows group, who invited, alreadyMember
+GET {{baseUrl}}/invites/link/{{linkInvite.response.body.token}}
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Join via the link (safe to repeat — already a member is a no-op)
+POST {{baseUrl}}/invites/link/{{linkInvite.response.body.token}}/accept
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Revoke the link (admin)
+DELETE {{baseUrl}}/groups/{{groupId}}/invites/{{linkInvite.response.body.id}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Revoked link — expect 404
+GET {{baseUrl}}/invites/link/{{linkInvite.response.body.token}}
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+
+###############################################################################
+# 6b. ITINERARY — draft, pins, finalize, PDF
+# Bob is a VIEWER in the group at this point (he accepted the SMS invite above).
+# Without a weather key, weather shows status "NOT_CONFIGURED" — that's expected. Elevation needs no key (OK or UNAVAILABLE).
+###############################################################################
+
+### No finalized itinerary yet — expect 404
+GET {{baseUrl}}/groups/{{groupId}}/itinerary
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Viewer can't start a draft — expect 403
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Start a draft (admin) — expect 201, status DRAFT, no waypoints
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Drop pin 1 — Manali (becomes START)
+# @name pinManali
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft/waypoints
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Manali",
+  "lat": 32.2432,
+  "lng": 77.1892,
+  "date": "2026-10-10",
+  "notes": "Fuel up and collect permits"
+}
+
+### Finalize with only 1 pin — expect 400 (needs a start and an end)
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft/finalize
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Drop pin 2 — Leh (appended, becomes END)
+# @name pinLeh
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft/waypoints
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Leh",
+  "lat": 34.1526,
+  "lng": 77.5771,
+  "date": "2026-10-12"
+}
+
+### Insert Keylong in the middle (position 2) — roles become START / MID / END
+# @name pinKeylong
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft/waypoints
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Keylong",
+  "lat": 32.5717,
+  "lng": 77.0339,
+  "date": "2026-10-11",
+  "position": 2
+}
+
+### Invalid pin (lat out of range, bad date format) — expect 400
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft/waypoints
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Nowhere",
+  "lat": 100,
+  "lng": 77,
+  "date": "10/10/2026"
+}
+
+### Edit a pin — add notes, clear its date
+PATCH {{baseUrl}}/groups/{{groupId}}/itinerary/draft/waypoints/{{pinKeylong.response.body.waypoints[1].id}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "notes": "Overnight stop",
+  "date": null
+}
+
+### Reorder (drag-and-drop) — Leh first: Leh = START, Manali = END
+PUT {{baseUrl}}/groups/{{groupId}}/itinerary/draft/waypoints/order
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "waypointIds": [
+    "{{pinLeh.response.body.waypoints[1].id}}",
+    "{{pinKeylong.response.body.waypoints[1].id}}",
+    "{{pinManali.response.body.waypoints[0].id}}"
+  ]
+}
+
+### Put it back: Manali → Keylong → Leh
+PUT {{baseUrl}}/groups/{{groupId}}/itinerary/draft/waypoints/order
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "waypointIds": [
+    "{{pinManali.response.body.waypoints[0].id}}",
+    "{{pinKeylong.response.body.waypoints[1].id}}",
+    "{{pinLeh.response.body.waypoints[1].id}}"
+  ]
+}
+
+### Viewer can't see the draft — expect 403
+GET {{baseUrl}}/groups/{{groupId}}/itinerary/draft
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### The draft (admin)
+GET {{baseUrl}}/groups/{{groupId}}/itinerary/draft
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Finalize — expect 201, status LOCKED, version 1
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft/finalize
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Bob (viewer) sees the finalized itinerary
+GET {{baseUrl}}/groups/{{groupId}}/itinerary
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Route map: the stops joined along roads (GeoJSON LineString + per-leg distance/time)
+GET {{baseUrl}}/groups/{{groupId}}/itinerary/route
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Download the PDF (REST Client shows a "Save" option for the response)
+GET {{baseUrl}}/groups/{{groupId}}/itinerary/pdf
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Edit after finalizing: new draft = copy of version 1 (basedOnVersion: 1)
+# @name draft2
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Delete Keylong from the new draft
+DELETE {{baseUrl}}/groups/{{groupId}}/itinerary/draft/waypoints/{{draft2.response.body.waypoints[1].id}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Finalize again — version 2
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft/finalize
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### All versions (newest first)
+GET {{baseUrl}}/groups/{{groupId}}/itinerary/versions
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Version 1 is unchanged (still has Keylong)
+GET {{baseUrl}}/groups/{{groupId}}/itinerary/versions/1
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### PDF of version 1
+GET {{baseUrl}}/groups/{{groupId}}/itinerary/pdf?version=1
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Refresh elevation + weather on the latest version (admin) — useful once API keys are set
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/refresh
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Start and discard a draft
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+###
+DELETE {{baseUrl}}/groups/{{groupId}}/itinerary/draft
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+
+###############################################################################
+# 6c. TRIP STATUS — live status for every member (+ history)
+# Live updates arrive over socket.io as "status:updated" (see API_DOCUMENTATION.md §10 and §13);
+# REST Client can't show sockets, so check them from the app or a socket.io test client.
+###############################################################################
+
+### Everyone's current status — all null to start
+GET {{baseUrl}}/groups/{{groupId}}/status
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Bob (viewer) sets IN_TRANSIT
+POST {{baseUrl}}/groups/{{groupId}}/status
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "status": "IN_TRANSIT"
+}
+
+### Alice sets NEED_HELP with a note
+POST {{baseUrl}}/groups/{{groupId}}/status
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "status": "NEED_HELP",
+  "note": "Flat tyre 5 km after Keylong"
+}
+
+### Unknown status — expect 400
+POST {{baseUrl}}/groups/{{groupId}}/status
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "status": "LOST"
+}
+
+### Current status per member
+GET {{baseUrl}}/groups/{{groupId}}/status
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Full history, newest first
+GET {{baseUrl}}/groups/{{groupId}}/status/history
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Paged: 1 item, then pass nextBefore as ?before=... for the next page
+GET {{baseUrl}}/groups/{{groupId}}/status/history?limit=1
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Only Bob's history
+GET {{baseUrl}}/groups/{{groupId}}/status/history?userId={{bobSignup.response.body.userId}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+
+###############################################################################
+# 6d. LIVE LOCATION — per-group sharing with a timer (needs Redis running; 503 otherwise)
+# Live pins arrive over socket.io as "location:updated" (API_DOCUMENTATION.md §11).
+###############################################################################
+
+### My sharing state — sharing: false, updateIntervalSeconds: 10
+GET {{baseUrl}}/groups/{{groupId}}/location/share
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Sending a position while not sharing — expect 409
+POST {{baseUrl}}/groups/{{groupId}}/location
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "points": [{ "lat": 32.2432, "lng": 77.1892 }]
+}
+
+### Bob starts sharing for 1 hour — remainingSeconds ≈ 3600
+PUT {{baseUrl}}/groups/{{groupId}}/location/share
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "duration": "ONE_HOUR"
+}
+
+### Bob sends his position (the app does this every 10 s)
+POST {{baseUrl}}/groups/{{groupId}}/location
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "points": [
+    { "lat": 32.2432, "lng": 77.1892, "accuracy": 8, "heading": 40, "speed": 11.5 }
+  ]
+}
+
+### A background batch — only the newest point is shown
+POST {{baseUrl}}/groups/{{groupId}}/location
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "points": [
+    { "lat": 32.3000, "lng": 77.1500 },
+    { "lat": 32.3100, "lng": 77.1450 }
+  ]
+}
+
+### Group map (Alice) — Bob has a pin, timer and trip status
+GET {{baseUrl}}/groups/{{groupId}}/location
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Switch to ALWAYS (no timer)
+PUT {{baseUrl}}/groups/{{groupId}}/location/share
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "duration": "ALWAYS"
+}
+
+### Stop sharing — Bob's pin disappears
+DELETE {{baseUrl}}/groups/{{groupId}}/location/share
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Register a phone for push notifications (token comes from Firebase in the app)
+POST {{baseUrl}}/devices
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "token": "test-fcm-token-from-the-app-0123456789",
+  "platform": "ANDROID"
+}
+
+### Unregister it (the app does this before logout)
+DELETE {{baseUrl}}/devices
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "token": "test-fcm-token-from-the-app-0123456789"
+}
+
+
+###############################################################################
+# 6e. CHAT, ALERTS & SOS, PRESENCE (API_DOCUMENTATION.md §14–16)
+# Sending chat messages is over socket.io ("chat:send"), which REST Client can't do:
+# use Postman's Socket.IO tab (see docs/CHAT_SOS_TESTING_GUIDE.md). Alerts and SOS are HTTP.
+###############################################################################
+
+### Who's online (anyone with the socket connected)
+GET {{baseUrl}}/groups/{{groupId}}/presence
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Chat history (newest page, oldest first) — includes alerts
+# @name chatHistory
+GET {{baseUrl}}/groups/{{groupId}}/messages?limit=20
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Search the chat
+GET {{baseUrl}}/groups/{{groupId}}/messages?search=kaza
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### My unread count
+GET {{baseUrl}}/groups/{{groupId}}/messages/unread
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Alice (admin) sends a CRITICAL alert
+# @name criticalAlert
+POST {{baseUrl}}/groups/{{groupId}}/alerts
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "type": "CRITICAL",
+  "category": "ROAD_CLOSURE",
+  "body": "Rohtang Pass closed after a landslide. Take the Atal Tunnel."
+}
+
+### Bob (viewer) tries a CRITICAL alert — expect 403
+POST {{baseUrl}}/groups/{{groupId}}/alerts
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "type": "CRITICAL",
+  "category": "WEATHER",
+  "body": "Snow"
+}
+
+### CRITICAL without a category — expect 400
+POST {{baseUrl}}/groups/{{groupId}}/alerts
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "type": "CRITICAL",
+  "body": "Snow"
+}
+
+### Alice sends a GENERAL announcement
+POST {{baseUrl}}/groups/{{groupId}}/alerts
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "type": "GENERAL",
+  "body": "Dinner at 8 at the hotel"
+}
+
+### Bob raises an SOS with the phone's coordinates
+# @name sos
+POST {{baseUrl}}/groups/{{groupId}}/alerts/sos
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "body": "Bike skidded near Gata Loops, ankle injured",
+  "lat": 32.9,
+  "lng": 77.6,
+  "accuracy": 15
+}
+
+### Tapping SOS again returns the same active SOS (same id)
+POST {{baseUrl}}/groups/{{groupId}}/alerts/sos
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{}
+
+### Active banners (unresolved CRITICAL / SOS)
+GET {{baseUrl}}/groups/{{groupId}}/alerts?active=true
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Alice acknowledges Bob's SOS
+POST {{baseUrl}}/groups/{{groupId}}/alerts/{{sos.response.body.id}}/ack
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Bob acknowledges his own SOS — expect 400
+POST {{baseUrl}}/groups/{{groupId}}/alerts/{{sos.response.body.id}}/ack
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Who has seen the SOS
+GET {{baseUrl}}/groups/{{groupId}}/alerts/{{sos.response.body.id}}
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Bob resolves his SOS ("I'm safe")
+POST {{baseUrl}}/groups/{{groupId}}/alerts/{{sos.response.body.id}}/resolve
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Bob tries to resolve the CRITICAL alert — expect 403 (admins only)
+POST {{baseUrl}}/groups/{{groupId}}/alerts/{{criticalAlert.response.body.id}}/resolve
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Alice resolves it
+POST {{baseUrl}}/groups/{{groupId}}/alerts/{{criticalAlert.response.body.id}}/resolve
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Mark the chat read up to the newest message
+POST {{baseUrl}}/groups/{{groupId}}/messages/read
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "messageId": "{{criticalAlert.response.body.id}}"
+}
+
+### Who has read the CRITICAL alert message
+GET {{baseUrl}}/groups/{{groupId}}/messages/{{criticalAlert.response.body.id}}/reads
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+
+###############################################################################
+# 6f. EXPENSES — splits, settle-up, receipts, report (API_DOCUMENTATION.md §17)
+# Bob is a VIEWER: he can add expenses too, but only edit his own.
+###############################################################################
+
+### Alice pays 900 for fuel, split equally between everyone (default)
+# @name fuel
+POST {{baseUrl}}/groups/{{groupId}}/expenses
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "amount": 900,
+  "category": "FUEL",
+  "date": "2026-10-11",
+  "description": "Diesel at Tandi",
+  "splitType": "EQUAL"
+}
+
+### Bob pays for a hotel room, custom split: Alice 600, Bob 400
+# @name hotel
+POST {{baseUrl}}/groups/{{groupId}}/expenses
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "amount": 1000,
+  "category": "ACCOMMODATION",
+  "date": "2026-10-12",
+  "splitType": "CUSTOM",
+  "shares": [
+    { "userId": "{{aliceSignup.response.body.userId}}", "amount": 600 },
+    { "userId": "{{bobSignup.response.body.userId}}", "amount": 400 }
+  ]
+}
+
+### Custom shares that don't add up — expect 400 "shares add up to 500.00, but the amount is 1000.00"
+POST {{baseUrl}}/groups/{{groupId}}/expenses
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "amount": 1000,
+  "category": "FOOD",
+  "date": "2026-10-12",
+  "splitType": "CUSTOM",
+  "shares": [{ "userId": "{{aliceSignup.response.body.userId}}", "amount": 500 }]
+}
+
+### All expenses, newest day first
+GET {{baseUrl}}/groups/{{groupId}}/expenses
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Only expenses Bob is part of
+GET {{baseUrl}}/groups/{{groupId}}/expenses?involving={{bobSignup.response.body.userId}}
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Bob tries to edit Alice's expense — expect 403
+PATCH {{baseUrl}}/groups/{{groupId}}/expenses/{{fuel.response.body.id}}
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "description": "mine now"
+}
+
+### Alice changes the amount — the equal split is recalculated
+PATCH {{baseUrl}}/groups/{{groupId}}/expenses/{{fuel.response.body.id}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "amount": 1000
+}
+
+### Summary: totals, categories, balances and who owes whom
+GET {{baseUrl}}/groups/{{groupId}}/expenses/summary
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Attach a receipt (put any JPEG/PNG/PDF next to this file as receipt.jpg)
+PUT {{baseUrl}}/groups/{{groupId}}/expenses/{{hotel.response.body.id}}/receipt
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=TravelGoBoundary
+
+--TravelGoBoundary
+Content-Disposition: form-data; name="file"; filename="receipt.jpg"
+Content-Type: image/jpeg
+
+< ./receipt.jpg
+--TravelGoBoundary--
+
+### Download the receipt
+GET {{baseUrl}}/groups/{{groupId}}/expenses/{{hotel.response.body.id}}/receipt
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Alice pays Bob back what the summary says (100)
+POST {{baseUrl}}/groups/{{groupId}}/expenses/settlements
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "toUserId": "{{bobSignup.response.body.userId}}",
+  "amount": 100,
+  "note": "UPI"
+}
+
+### Summary again — settleUp is empty
+GET {{baseUrl}}/groups/{{groupId}}/expenses/summary
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Download the report (PDF; use ?format=csv for a spreadsheet)
+GET {{baseUrl}}/groups/{{groupId}}/expenses/report
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Currency is fixed once there are expenses — expect 409
+PATCH {{baseUrl}}/groups/{{groupId}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "currency": "USD"
+}
+
+
+###############################################################################
+# 6g. OFFLINE — trip bundle, retry-safe writes, draft conflicts (API_DOCUMENTATION.md §3.8, §18)
+###############################################################################
+
+### Everything the app caches for this trip. Copy the ETag response header for the next request.
+# @name bundle
+GET {{baseUrl}}/groups/{{groupId}}/offline-bundle
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Nothing changed since — expect 304 with no body
+GET {{baseUrl}}/groups/{{groupId}}/offline-bundle
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+If-None-Match: {{bundle.response.headers.ETag}}
+
+### A status set offline 2 hours ago, sent now (send it twice: the second returns the same id)
+POST {{baseUrl}}/groups/{{groupId}}/status
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "status": "STOPPED",
+  "note": "No signal at Sarchu",
+  "recordedAt": "{{$datetime iso8601 -2 h}}",
+  "clientId": "offline-status-0001"
+}
+
+### An expense queued offline (send it twice: no duplicate)
+POST {{baseUrl}}/groups/{{groupId}}/expenses
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "amount": 250,
+  "category": "FOOD",
+  "date": "2026-10-12",
+  "splitType": "EQUAL",
+  "clientId": "offline-expense-0001"
+}
+
+### Start a draft, then edit it with a stale If-Match — expect 412
+# @name conflictDraft
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+###
+POST {{baseUrl}}/groups/{{groupId}}/itinerary/draft/waypoints
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+If-Match: 99
+Content-Type: application/json
+
+{
+  "name": "Sarchu",
+  "lat": 32.9,
+  "lng": 77.57
+}
+
+### Discard it again
+DELETE {{baseUrl}}/groups/{{groupId}}/itinerary/draft
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+
+###############################################################################
+# 6h. PRIVACY — my data, closing a trip (API_DOCUMENTATION.md §5, §6)
+###############################################################################
+
+### Download everything stored about me (JSON)
+GET {{baseUrl}}/auth/me/export
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+
+### Close the trip (admin) — read-only, deleted after 30 days
+POST {{baseUrl}}/groups/{{groupId}}/close
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Writes are refused while closed — expect 409
+POST {{baseUrl}}/groups/{{groupId}}/status
+Authorization: Bearer {{bobLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "status": "ARRIVED"
+}
+
+### Reopen it
+POST {{baseUrl}}/groups/{{groupId}}/reopen
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+
+###############################################################################
+# 7. AUTH — OTP login, password reset, logout
+###############################################################################
+
+### Request a login OTP by SMS for Bob — copy it into @bobLoginOtp
+POST {{baseUrl}}/auth/otp/request
+Content-Type: application/json
+
+{
+  "phone": "{{bobPhone}}"
+}
+
+### Log in with the OTP (needs @bobLoginOtp)
+POST {{baseUrl}}/auth/otp/login
+Content-Type: application/json
+
+{
+  "phone": "{{bobPhone}}",
+  "code": "{{bobLoginOtp}}"
+}
+
+### Forgot password (Bob) — copy the code into @bobResetCode
+POST {{baseUrl}}/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "{{bobEmail}}"
+}
+
+### Reset password (needs @bobResetCode). Logs Bob out everywhere.
+POST {{baseUrl}}/auth/reset-password
+Content-Type: application/json
+
+{
+  "email": "{{bobEmail}}",
+  "code": "{{bobResetCode}}",
+  "newPassword": "N3w!Stronger"
+}
+
+### Login with the new password
+# @name bobNewLogin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "identifier": "{{bobUsername}}",
+  "password": "N3w!Stronger"
+}
+
+### Log Alice out — her refresh token stops working
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+
+###############################################################################
+# 8. CLEANUP — delete the group (admin)
+# Alice's access token lasts ~15 min after logout; if it's expired, log in again.
+###############################################################################
+
+### Bob (viewer) tries to delete the group — expect 403 "Requires group role: ADMIN"
+DELETE {{baseUrl}}/groups/{{groupId}}
+Authorization: Bearer {{bobNewLogin.response.body.accessToken}}
+
+### Delete the group
+DELETE {{baseUrl}}/groups/{{groupId}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Gone — expect 404
+GET {{baseUrl}}/groups/{{groupId}}
+Authorization: Bearer {{aliceRefresh.response.body.accessToken}}
+
+### Delete Bob's account (needs his current password) — personal data erased, he leaves every group
+DELETE {{baseUrl}}/auth/me
+Authorization: Bearer {{bobNewLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "password": "N3w!Stronger"
+}
