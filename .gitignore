@@ -19,3 +19,17 @@ uploads/
 
 # Third-party reference project (nestbeacon chat), not part of this codebase
 in-app chat resource/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# Local database dumps (backups are kept outside the repo, in ../db-backups)
+*.dump
+
+# Documentation (kept locally, not in the repo)
+*.md
