@@ -155,8 +155,12 @@ export class ItineraryController {
     summary: 'Finalize the draft (admin): locks it as the next version, visible to the group. Needs ≥ 2 pins.',
   })
   @ApiHeader(IF_MATCH_DOC)
-  finalize(@Param('groupId') groupId: string, @Headers('if-match') ifMatch?: string) {
-    return this.itineraryService.finalize(groupId, revisionFrom(ifMatch));
+  finalize(
+    @Param('groupId') groupId: string,
+    @CurrentUser() user: JwtPayload,
+    @Headers('if-match') ifMatch?: string,
+  ) {
+    return this.itineraryService.finalize(groupId, revisionFrom(ifMatch), user.sub);
   }
 
   @Post('draft/refresh')

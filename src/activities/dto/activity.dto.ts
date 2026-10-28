@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsDateString, IsEnum, IsInt, IsNumber, IsNotEmpty, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { ActivityStatus } from '../../database/entities/index.js';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
@@ -52,4 +52,34 @@ export class ListActivityUpdatesQueryDto {
   @IsOptional()
   @IsUUID()
   before?: string;
+}
+
+export class SetAttendanceDto {
+  @ApiProperty({ example: true, description: 'true = I have arrived at this stop, false = undo' })
+  @IsBoolean()
+  arrived!: boolean;
+}
+
+export class ArrivalCheckDto {
+  @ApiProperty({ example: 32.2433 })
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  lat!: number;
+
+  @ApiProperty({ example: 77.1893 })
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  lng!: number;
+
+  @ApiProperty({ example: 12, description: 'Horizontal accuracy of the fix in meters' })
+  @IsNumber()
+  @Min(0)
+  accuracy!: number;
+
+  @ApiPropertyOptional({ example: '2026-10-12T07:15:00.000Z', description: 'When the device took the fix. Default: now.' })
+  @IsOptional()
+  @IsDateString()
+  recordedAt?: string;
 }

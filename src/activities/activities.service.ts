@@ -2,20 +2,22 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, IsNull, QueryFailedError, Repository } from 'typeorm';
 import {
+  ActivityAttendance,
   ActivityProgress,
   ActivityStatus,
   ActivityUpdate,
   Group,
-  type GroupMember,
+  GroupMember,
   GroupRole,
   Itinerary,
   ItineraryStatus,
   type User,
   Waypoint,
 } from '../database/entities/index.js';
+import { distanceMeters } from '../enrichment/geo.js';
 import { ItineraryService } from '../itinerary/itinerary.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
-import type { CreateActivityUpdateDto, ListActivityUpdatesQueryDto } from './dto/activity.dto.js';
+import type { ArrivalCheckDto, CreateActivityUpdateDto, ListActivityUpdatesQueryDto } from './dto/activity.dto.js';
 
 /** Socket events to the group (names from change request v1.0, §15). */
 export const ACTIVITY_EVENTS = {
@@ -23,15 +25,35 @@ export const ACTIVITY_EVENTS = {
   UPDATE_ADDED: 'activity:update_added',
   UPDATE_EDITED: 'activity:update_edited',
   UPDATE_DELETED: 'activity:update_deleted',
+  ATTENDANCE_UPDATED: 'activity:attendance_updated', // backend handover 2026-10-22, P-03
 } as const;
 
 const DEFAULT_LIST_LIMIT = 50;
+
+/**
+ * Arrival suggestion rules (backend handover 2026-10-22, P-04). Proposed defaults, not yet
+ * signed off by product: within 200 m of the stop, with a fix accurate to 100 m, at most 2 min old.
+ */
+export const ARRIVAL = {
+  radiusMeters: 200,
+  maxAccuracyMeters: 100,
+  maxAgeMs: 2 * 60_000,
+} as const;
+
+export type ArrivalRefusal = 'ACCURACY_TOO_LOW' | 'POSITION_TOO_OLD' | 'TOO_FAR';
 
 interface Person {
   userId: string;
   username: string;
   name: string;
   avatarUrl: string | null;
+}
+
+export interface AttendanceView {
+  activityId: string;
+  arrivedCount: number;
+  totalMembers: number;
+  members: (Person & { arrived: boolean; arrivedAt: Date | null })[];
 }
 
 export interface ActivityUpdateView {
@@ -59,6 +81,8 @@ export class ActivitiesService {
     @InjectRepository(ActivityUpdate) private readonly updates: Repository<ActivityUpdate>,
     @InjectRepository(Itinerary) private readonly itineraries: Repository<Itinerary>,
     @InjectRepository(Waypoint) private readonly waypoints: Repository<Waypoint>,
+    @InjectRepository(ActivityAttendance) private readonly attendanceRows: Repository<ActivityAttendance>,
+    @InjectRepository(GroupMember) private readonly members: Repository<GroupMember>,
     private readonly dataSource: DataSource,
     private readonly itinerary: ItineraryService,
     private readonly realtime: RealtimeService,
@@ -69,6 +93,10 @@ export class ActivitiesService {
   /** The latest finalized itinerary's stops with their status (404 if nothing is finalized). */
   async list(groupId: string) {
     const latest = await this.itinerary.getLatest(groupId);
+    const [arrived, totalMembers] = await Promise.all([
+      this.arrivedCounts(groupId),
+      this.members.countBy({ groupId }),
+    ]);
     return {
       itineraryVersion: latest.version,
       activities: latest.waypoints.map((w) => ({
@@ -78,7 +106,11 @@ export class ActivitiesService {
         role: w.role,
         name: w.name,
         date: w.date,
+        startTime: w.startTime,
+        endTime: w.endTime,
         ...w.activity,
+        arrivedCount: arrived.get(w.activityId) ?? 0,
+        totalMembers,
       })),
     };
   }
@@ -211,6 +243,109 @@ export class ActivitiesService {
       deletedBy: actor.userId,
       timestamp: deletedAt,
     });
+  }
+
+  // ---------------------------------------------------------------- attendance
+
+  /** Who has arrived at a stop. Any stop the group ever had can be read; counts cover current members. */
+  async attendance(groupId: string, activityId: string): Promise<AttendanceView> {
+    await this.knownStop(groupId, activityId);
+    const [members, rows] = await Promise.all([
+      this.members.find({ where: { groupId }, relations: { user: true }, order: { joinedAt: 'ASC' } }),
+      this.attendanceRows.find({ where: { groupId, stopKey: activityId } }),
+    ]);
+    const arrivedAt = new Map(rows.map((r) => [r.userId, r.arrivedAt]));
+    const list = members.map((m) => ({
+      ...person(m.user),
+      arrived: arrivedAt.has(m.userId),
+      arrivedAt: arrivedAt.get(m.userId) ?? null,
+    }));
+    return {
+      activityId,
+      arrivedCount: list.filter((m) => m.arrived).length,
+      totalMembers: list.length,
+      members: list,
+    };
+  }
+
+  /**
+   * A member marks only themselves as arrived (or undoes it); who comes from the token, never the
+   * body. The stop must be in the current itinerary. Sending the state it already has changes
+   * nothing and sends no event, so retries are safe.
+   */
+  async setMyAttendance(groupId: string, actor: GroupMember, activityId: string, arrived: boolean) {
+    await this.currentStop(groupId, activityId);
+    const key = { groupId, stopKey: activityId, userId: actor.userId };
+    let changed: boolean;
+    if (arrived) {
+      const inserted = await this.attendanceRows
+        .createQueryBuilder()
+        .insert()
+        .values(key)
+        .orIgnore()
+        .returning(['arrived_at'])
+        .execute();
+      changed = (inserted.raw as unknown[]).length > 0;
+    } else {
+      changed = ((await this.attendanceRows.delete(key)).affected ?? 0) > 0;
+    }
+
+    const view = await this.attendance(groupId, activityId);
+    if (changed) {
+      await this.realtime.emitToGroup(groupId, ACTIVITY_EVENTS.ATTENDANCE_UPDATED, {
+        groupId,
+        activityId,
+        userId: actor.userId,
+        arrived,
+        arrivedAt: view.members.find((m) => m.userId === actor.userId)?.arrivedAt ?? null,
+        arrivedCount: view.arrivedCount,
+        totalMembers: view.totalMembers,
+        timestamp: new Date(),
+      });
+    }
+    return view;
+  }
+
+  /**
+   * Is this position close enough to the stop to suggest "You've arrived"? Only a suggestion:
+   * it never records anything; the member confirms with PUT …/attendance/me. A fix that is too
+   * vague or too old is refused with a reason rather than guessed at.
+   */
+  async arrivalCheck(groupId: string, actor: GroupMember, activityId: string, dto: ArrivalCheckDto) {
+    const stop = await this.currentStop(groupId, activityId);
+    const distance = Math.round(distanceMeters(dto.lat, dto.lng, stop.lat, stop.lng));
+    const recordedAt = dto.recordedAt ? new Date(dto.recordedAt) : new Date();
+    const ageMs = Date.now() - recordedAt.getTime(); // negative (clock skew) counts as fresh
+    const withinRadius = distance <= ARRIVAL.radiusMeters;
+
+    let reason: ArrivalRefusal | null = null;
+    if (dto.accuracy > ARRIVAL.maxAccuracyMeters) reason = 'ACCURACY_TOO_LOW';
+    else if (ageMs > ARRIVAL.maxAgeMs) reason = 'POSITION_TOO_OLD';
+    else if (!withinRadius) reason = 'TOO_FAR';
+
+    const alreadyArrived = await this.attendanceRows.existsBy({ groupId, stopKey: activityId, userId: actor.userId });
+    return {
+      activityId,
+      withinRadius,
+      distanceMeters: distance,
+      radiusMeters: ARRIVAL.radiusMeters,
+      accepted: reason === null,
+      reason,
+      alreadyArrived,
+    };
+  }
+
+  /** Arrived count per stop, current members only (for the activities list). */
+  private async arrivedCounts(groupId: string): Promise<Map<string, number>> {
+    const rows = await this.attendanceRows
+      .createQueryBuilder('a')
+      .innerJoin(GroupMember, 'm', 'm.group_id = a.group_id AND m.user_id = a.user_id')
+      .select('a.stop_key', 'stopKey')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('a.group_id = :groupId', { groupId })
+      .groupBy('a.stop_key')
+      .getRawMany<{ stopKey: string; count: number }>();
+    return new Map(rows.map((r) => [r.stopKey, r.count]));
   }
 
   // ---------------------------------------------------------------- helpers

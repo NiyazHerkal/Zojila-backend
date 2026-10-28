@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis';
 import { distanceMeters } from '../enrichment/geo.js';
 import { REDIS } from '../redis/redis.module.js';
 import { PlaceCategory, PlacesProvider, type RawPlace } from './places.provider.js';
+import { ErrorCode, withCode } from '../errors/error-codes.js';
 
 const CACHE_TTL_SECONDS = 10 * 60;
 // The cache key rounds the position to ~100 m; asking the source for a slightly bigger circle
@@ -61,7 +62,7 @@ export class PlacesService {
       places = await this.provider.nearby(category, lat, lng, q.radiusMeters + CACHE_MARGIN_METERS);
     } catch (err) {
       this.logger.warn(`Places lookup failed: ${(err as Error).message}`);
-      throw new ServiceUnavailableException('Nearby places are temporarily unavailable. Try again in a minute.');
+      throw withCode(new ServiceUnavailableException('Nearby places are temporarily unavailable. Try again in a minute.'), ErrorCode.PROVIDER_UNAVAILABLE);
     }
     await this.cacheSet(key, places);
     return places;

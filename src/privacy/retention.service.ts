@@ -2,8 +2,9 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, LessThan, Repository } from 'typeorm';
-import { Feedback, Group, Invite, LocationShareLink, UsageDaily, User } from '../database/entities/index.js';
+import { Feedback, Group, Invite, LocationShareLink, Notification, UsageDaily, User } from '../database/entities/index.js';
 import { GroupsService } from '../groups/groups.service.js';
+import { NOTIFICATION_RETENTION_DAYS } from '../notifications/notification-feed.service.js';
 import { reportError } from '../security/sentry.js';
 import { StorageService } from '../storage/storage.service.js';
 
@@ -19,6 +20,7 @@ export interface RetentionResult {
   oldUsageRowsDeleted: number;
   oldFeedbackDeleted: number;
   oldLiveLinksDeleted: number;
+  oldNotificationsDeleted: number;
 }
 
 /**
@@ -30,6 +32,7 @@ export interface RetentionResult {
  *   - Usage counters older than USAGE_RETENTION_DAYS (180) and feedback older than
  *     FEEDBACK_RETENTION_DAYS (365) are deleted.
  *   - Live location links (people outside the app) are deleted 30 days after they ended.
+ *   - Notifications feed entries are deleted after NOTIFICATION_RETENTION_DAYS (90).
  * Location history needs no job: only the latest position is kept, and only while sharing.
  * Set RETENTION_JOB_DISABLED=true to turn the timer off (tests).
  */
@@ -51,6 +54,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(UsageDaily) private readonly usage: Repository<UsageDaily>,
     @InjectRepository(Feedback) private readonly feedback: Repository<Feedback>,
     @InjectRepository(LocationShareLink) private readonly liveLinks: Repository<LocationShareLink>,
+    @InjectRepository(Notification) private readonly notifications: Repository<Notification>,
     private readonly groups: GroupsService,
     private readonly storage: StorageService,
   ) {
@@ -83,11 +87,19 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
       oldUsageRowsDeleted: await this.purgeOldUsage(now),
       oldFeedbackDeleted: await this.purgeOldFeedback(now),
       oldLiveLinksDeleted: await this.purgeOldLiveLinks(now),
+      oldNotificationsDeleted: await this.purgeOldNotifications(now),
     };
     if (Object.values(result).some(Boolean)) {
       this.logger.log(`Retention: ${JSON.stringify(result)}`);
     }
     return result;
+  }
+
+  /** Notifications feed entries older than NOTIFICATION_RETENTION_DAYS. */
+  async purgeOldNotifications(now: Date, onlyUserIds?: string[]): Promise<number> {
+    const cutoff = new Date(now.getTime() - NOTIFICATION_RETENTION_DAYS * DAY_MS);
+    const res = await this.notifications.delete({ createdAt: LessThan(cutoff), ...(onlyUserIds && { userId: In(onlyUserIds) }) });
+    return res.affected ?? 0;
   }
 
   // Each step takes an optional `onlyIds` so tests can run it against their own rows without

@@ -26,6 +26,8 @@ import {
   type TripRoute,
   type WeatherResult,
 } from '../enrichment/enrichment.service.js';
+import { ErrorCode, withCode } from '../errors/error-codes.js';
+import { NotificationFeedService, TRIP_FEED_TYPES } from '../notifications/notification-feed.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import type { CreateWaypointDto } from './dto/create-waypoint.dto.js';
 import type { UpdateWaypointDto } from './dto/update-waypoint.dto.js';
@@ -66,6 +68,9 @@ export interface WaypointView {
   date: string | null;
   /** The stop's date is before tripStart or after tripEnd (e.g. after the trip dates were edited). */
   outsideTripDates: boolean;
+  /** HH:mm, wall-clock time at the stop; null when not set. */
+  startTime: string | null;
+  endTime: string | null;
   notes: string | null;
   elevation: ElevationView;
   weather: WeatherResult;
@@ -118,6 +123,7 @@ export class ItineraryService {
     private readonly enrichment: EnrichmentService,
     private readonly pdf: ItineraryPdfService,
     private readonly realtime: RealtimeService,
+    private readonly feed: NotificationFeedService,
   ) {}
 
   // --- finalized versions (all members) ---
@@ -201,6 +207,8 @@ export class ItineraryService {
                 lat: w.lat,
                 lng: w.lng,
                 date: w.date,
+                startTime: w.startTime,
+                endTime: w.endTime,
                 notes: w.notes,
                 elevation: w.elevation,
                 weatherJson: w.weatherJson,
@@ -225,6 +233,9 @@ export class ItineraryService {
   async addWaypoint(groupId: string, dto: CreateWaypointDto, expectedRevision?: number): Promise<ItineraryView> {
     await this.requireDraft(groupId); // fail fast before calling third-party APIs
     const date = dto.date ?? null;
+    const startTime = dto.startTime ?? null;
+    const endTime = dto.endTime ?? null;
+    assertTimes(startTime, endTime);
     const [elevation, weather] = await Promise.all([
       this.enrichment.elevationFor(dto.lat, dto.lng),
       this.enrichment.weatherFor(dto.lat, dto.lng, date),
@@ -241,6 +252,8 @@ export class ItineraryService {
           lat: dto.lat,
           lng: dto.lng,
           date,
+          startTime,
+          endTime,
           notes: dto.notes ?? null,
           elevation,
           weatherJson: weather as unknown as Record<string, unknown>,
@@ -256,6 +269,10 @@ export class ItineraryService {
     dto: UpdateWaypointDto,
     expectedRevision?: number,
   ): Promise<ItineraryView> {
+    // A pin moves as a whole: half a coordinate pair would silently mix the old and new place.
+    if ((dto.lat == null) !== (dto.lng == null)) {
+      throw new BadRequestException('Send lat and lng together to move a pin');
+    }
     const draft = await this.requireDraft(groupId);
     const current = await this.waypoints.findOne({ where: { id: waypointId, itineraryId: draft.id } });
     if (!current) throw new NotFoundException('Waypoint not found in the draft');
@@ -263,6 +280,9 @@ export class ItineraryService {
     const lat = dto.lat ?? current.lat;
     const lng = dto.lng ?? current.lng;
     const date = dto.date === undefined ? current.date : dto.date;
+    const startTime = dto.startTime === undefined ? current.startTime : dto.startTime;
+    const endTime = dto.endTime === undefined ? current.endTime : dto.endTime;
+    assertTimes(startTime, endTime);
     const moved = lat !== current.lat || lng !== current.lng;
     const [elevation, weather] = await Promise.all([
       moved ? this.enrichment.elevationFor(lat, lng) : current.elevation,
@@ -274,7 +294,7 @@ export class ItineraryService {
       if (!pin) throw new NotFoundException('Waypoint not found in the draft');
       if (dto.name != null) pin.name = dto.name;
       if (dto.notes !== undefined) pin.notes = dto.notes;
-      Object.assign(pin, { lat, lng, date, elevation, weatherJson: weather });
+      Object.assign(pin, { lat, lng, date, startTime, endTime, elevation, weatherJson: weather });
       await manager.save(pin);
     }, expectedRevision);
   }
@@ -301,7 +321,7 @@ export class ItineraryService {
   }
 
   /** Admin confirms the draft: it becomes the next locked version, visible to the whole group. */
-  async finalize(groupId: string, expectedRevision?: number): Promise<ItineraryView> {
+  async finalize(groupId: string, expectedRevision?: number, actorId?: string): Promise<ItineraryView> {
     const locked = await this.dataSource.transaction(async (manager) => {
       const draft = await this.lockDraft(manager, groupId);
       assertRevision(draft, expectedRevision);
@@ -327,6 +347,16 @@ export class ItineraryService {
       version: locked.version,
       lockedAt: locked.lockedAt,
     });
+    await this.feed.recordForGroup(
+      groupId,
+      actorId ?? null,
+      TRIP_FEED_TYPES.ITINERARY_UPDATED,
+      (trip) => ({
+        title: trip,
+        body: locked.version === 1 ? 'The itinerary is ready' : `The itinerary was updated (version ${locked.version})`,
+      }),
+      { version: String(locked.version) },
+    );
     return this.view(locked);
   }
 
@@ -525,6 +555,8 @@ export class ItineraryService {
       lng: pin.lng,
       date: pin.date,
       outsideTripDates: !!(pin.date && tripDays && (pin.date < tripDays.start || pin.date > tripDays.end)),
+      startTime: pin.startTime,
+      endTime: pin.endTime,
       notes: pin.notes,
       elevation,
       weather: (pin.weatherJson as WeatherResult | null) ?? {
@@ -547,6 +579,14 @@ function utcDay(date: Date): string {
   return new Date(date).toISOString().slice(0, 10);
 }
 
+/** An end time needs a start time and must come after it (same day; HH:mm compares as text). */
+function assertTimes(startTime: string | null, endTime: string | null): void {
+  if (endTime && !startTime) throw new BadRequestException('endTime needs a startTime');
+  if (startTime && endTime && endTime <= startTime) {
+    throw new BadRequestException('endTime must be after startTime');
+  }
+}
+
 function isUniqueViolation(err: unknown): boolean {
   return err instanceof QueryFailedError && (err.driverError as { code?: string }).code === '23505';
 }
@@ -554,8 +594,11 @@ function isUniqueViolation(err: unknown): boolean {
 /** 412 when an admin edits the draft from an outdated copy (If-Match ≠ current revision). */
 function assertRevision(draft: Itinerary, expected?: number): void {
   if (expected !== undefined && expected !== draft.revision) {
-    throw new PreconditionFailedException(
-      `The draft has changed since you loaded it (now revision ${draft.revision}). Reload it, then try again.`,
+    throw withCode(
+      new PreconditionFailedException(
+        `The draft has changed since you loaded it (now revision ${draft.revision}). Reload it, then try again.`,
+      ),
+      ErrorCode.DRAFT_CHANGED,
     );
   }
 }

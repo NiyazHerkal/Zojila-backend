@@ -21,6 +21,9 @@ import { UsageDaily } from './usage-daily.entity.js';
 import { ActivityProgress } from './activity-progress.entity.js';
 import { ActivityUpdate } from './activity-update.entity.js';
 import { LocationShareLink } from './location-share-link.entity.js';
+import { ActivityAttendance } from './activity-attendance.entity.js';
+import { SavedPlace } from './saved-place.entity.js';
+import { Notification } from './notification.entity.js';
 
 export const entities = [
   User,
@@ -46,6 +49,9 @@ export const entities = [
   ActivityProgress,
   ActivityUpdate,
   LocationShareLink,
+  ActivityAttendance,
+  SavedPlace,
+  Notification,
 ];
 
 export * from './enums.js';
@@ -72,3 +78,6 @@ export { UsageDaily } from './usage-daily.entity.js';
 export { ActivityProgress } from './activity-progress.entity.js';
 export { ActivityUpdate } from './activity-update.entity.js';
 export { LocationShareLink } from './location-share-link.entity.js';
+export { ActivityAttendance } from './activity-attendance.entity.js';
+export { SavedPlace } from './saved-place.entity.js';
+export { Notification } from './notification.entity.js';

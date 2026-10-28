@@ -24,6 +24,7 @@ import type { ResetPasswordDto } from './dto/reset-password.dto.js';
 import type { SignupDto } from './dto/signup.dto.js';
 import type { UpdateProfileDto } from './dto/update-profile.dto.js';
 import type { VerifyDto } from './dto/verify.dto.js';
+import { ErrorCode, withCode } from '../errors/error-codes.js';
 
 const OTP_TTL_MINUTES = 10;
 const PASSWORD_RESET_TTL_MINUTES = 15;
@@ -62,10 +63,10 @@ export class AuthService {
       where: this.identifierWhere(dto.email, dto.phone),
     });
     if (existing) {
-      throw new ConflictException('An account with this email/phone already exists');
+      throw withCode(new ConflictException('An account with this email/phone already exists'), ErrorCode.ACCOUNT_EXISTS);
     }
     if (await this.users.existsBy({ username: dto.username })) {
-      throw new ConflictException('Username is already taken');
+      throw withCode(new ConflictException('Username is already taken'), ErrorCode.USERNAME_TAKEN);
     }
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
@@ -91,7 +92,7 @@ export class AuthService {
     const user = await this.users.findOne({
       where: dto.userId ? { id: dto.userId } : this.identifierWhere(dto.email, dto.phone),
     });
-    if (!user) throw new BadRequestException('Invalid account or code');
+    if (!user) throw withCode(new BadRequestException('Invalid account or code'), ErrorCode.INVALID_CODE);
 
     await this.assertOtp(user, OtpPurpose.SIGNUP_VERIFICATION, dto.code);
 
@@ -129,10 +130,10 @@ export class AuthService {
       ],
     });
     if (!user || !(await bcrypt.compare(dto.password, user.passwordHash))) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw withCode(new UnauthorizedException('Invalid credentials'), ErrorCode.INVALID_CREDENTIALS);
     }
     if (!user.emailVerified && !user.phoneVerified) {
-      throw new UnauthorizedException('Account not verified');
+      throw withCode(new UnauthorizedException('Account not verified'), ErrorCode.ACCOUNT_NOT_VERIFIED);
     }
 
     return this.issueTokenPair(user.id, !!dto.rememberMe);
@@ -153,7 +154,7 @@ export class AuthService {
 
   async loginWithOtp(dto: OtpLoginDto): Promise<TokenPair> {
     const user = await this.users.findOne({ where: { phone: dto.phone } });
-    if (!user) throw new UnauthorizedException('Invalid phone or code');
+    if (!user) throw withCode(new UnauthorizedException('Invalid phone or code'), ErrorCode.INVALID_CODE);
 
     await this.assertOtp(user, OtpPurpose.LOGIN, dto.code);
     // The code went to this phone, so entering it proves the user owns it: that verifies the phone.
@@ -169,12 +170,12 @@ export class AuthService {
         secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
       });
     } catch {
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw withCode(new UnauthorizedException('Invalid or expired refresh token'), ErrorCode.REFRESH_TOKEN_INVALID);
     }
 
     const user = await this.users.findOne({ where: { id: payload.sub } });
     if (!user?.refreshTokenHash || !this.matchesRefreshHash(refreshToken, user.refreshTokenHash)) {
-      throw new UnauthorizedException('Refresh token has been revoked');
+      throw withCode(new UnauthorizedException('Refresh token has been revoked'), ErrorCode.REFRESH_TOKEN_REVOKED);
     }
 
     return this.issueTokenPair(user.id, !!payload.rm);
@@ -211,7 +212,7 @@ export class AuthService {
 
     const user = await this.users.findOne({ where: this.identifierWhere(dto.email, dto.phone) });
     if (!user?.passwordResetTokenHash || !user.passwordResetExpiresAt || user.passwordResetExpiresAt < new Date()) {
-      throw new BadRequestException('Invalid or expired reset code');
+      throw withCode(new BadRequestException('Invalid or expired reset code'), ErrorCode.INVALID_CODE);
     }
     if (!(await bcrypt.compare(dto.code, user.passwordResetTokenHash))) {
       const attempts = user.passwordResetAttempts + 1;
@@ -224,7 +225,7 @@ export class AuthService {
         throw this.tooManyAttempts();
       }
       await this.users.update(user.id, { passwordResetAttempts: attempts });
-      throw new BadRequestException('Invalid or expired reset code');
+      throw withCode(new BadRequestException('Invalid or expired reset code'), ErrorCode.INVALID_CODE);
     }
 
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
@@ -242,7 +243,7 @@ export class AuthService {
   // An access token outlives account deletion by up to ~15 min; the profile routes refuse it.
   private async activeUser(userId: string): Promise<User> {
     const user = await this.users.findOne({ where: { id: userId } });
-    if (!user || user.deletedAt) throw new UnauthorizedException('This account has been deleted');
+    if (!user || user.deletedAt) throw withCode(new UnauthorizedException('This account has been deleted'), ErrorCode.ACCOUNT_DELETED);
     return user;
   }
 
@@ -257,7 +258,7 @@ export class AuthService {
     const { username, name, avatarUrl } = user;
     if (dto.username !== undefined && dto.username !== user.username) {
       if (await this.users.existsBy({ username: dto.username, id: Not(userId) })) {
-        throw new ConflictException('Username is already taken');
+        throw withCode(new ConflictException('Username is already taken'), ErrorCode.USERNAME_TAKEN);
       }
       user.username = dto.username;
     }
@@ -297,7 +298,8 @@ export class AuthService {
       return await this.users.save(user);
     } catch (err) {
       if (err instanceof QueryFailedError && (err.driverError as { code?: string }).code === '23505') {
-        throw new ConflictException(conflictMessage);
+        const code = conflictMessage.startsWith('Username') ? ErrorCode.USERNAME_TAKEN : ErrorCode.ACCOUNT_EXISTS;
+        throw withCode(new ConflictException(conflictMessage), code);
       }
       throw err;
     }
@@ -334,9 +336,9 @@ export class AuthService {
   }
 
   private tooManyAttempts(): HttpException {
-    return new HttpException(
-      'Too many incorrect attempts. Request a new code.',
-      HttpStatus.TOO_MANY_REQUESTS,
+    return withCode(
+      new HttpException('Too many incorrect attempts. Request a new code.', HttpStatus.TOO_MANY_REQUESTS),
+      ErrorCode.TOO_MANY_ATTEMPTS,
     );
   }
 
@@ -346,7 +348,7 @@ export class AuthService {
     code: string,
   ): Promise<void> {
     if (user.otpPurpose !== purpose || !user.otpCodeHash || !user.otpExpiresAt || user.otpExpiresAt < new Date()) {
-      throw new BadRequestException('Invalid or expired code');
+      throw withCode(new BadRequestException('Invalid or expired code'), ErrorCode.INVALID_CODE);
     }
     if (!(await bcrypt.compare(code, user.otpCodeHash))) {
       const attempts = user.otpAttempts + 1;
@@ -355,7 +357,7 @@ export class AuthService {
         throw this.tooManyAttempts();
       }
       await this.users.update(user.id, { otpAttempts: attempts });
-      throw new BadRequestException('Invalid or expired code');
+      throw withCode(new BadRequestException('Invalid or expired code'), ErrorCode.INVALID_CODE);
     }
   }
 

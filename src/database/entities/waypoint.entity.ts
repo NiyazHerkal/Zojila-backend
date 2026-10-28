@@ -8,9 +8,15 @@ import {
   OneToMany,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import type { Relation } from 'typeorm';
+import type { Relation, ValueTransformer } from 'typeorm';
 import { Itinerary } from './itinerary.entity.js';
 import { WaypointDetail } from './waypoint-detail.entity.js';
+
+/** Postgres returns `time` as HH:mm:ss; the API uses HH:mm. */
+const hhmm: ValueTransformer = {
+  to: (value: string | null | undefined) => value,
+  from: (value: string | null) => (value ? value.slice(0, 5) : null),
+};
 
 @Entity('waypoints')
 @Index(['itineraryId', 'order'])
@@ -44,6 +50,13 @@ export class Waypoint {
   // Calendar date of this stop (YYYY-MM-DD). No time or timezone, so it reads the same everywhere.
   @Column({ type: 'date', nullable: true })
   date!: string | null;
+
+  // Optional start/end time of the stop (HH:mm), wall-clock time at the stop like `date`.
+  @Column({ name: 'start_time', type: 'time', nullable: true, transformer: hhmm })
+  startTime!: string | null;
+
+  @Column({ name: 'end_time', type: 'time', nullable: true, transformer: hhmm })
+  endTime!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
   notes!: string | null;

@@ -53,6 +53,24 @@ export interface TripRoute {
   computedAt: string;
 }
 
+export enum RoadStatus {
+  OK = 'OK',
+  NO_ROUTE = 'NO_ROUTE', // no road joins the points (e.g. across water)
+  NOT_CONFIGURED = 'NOT_CONFIGURED', // routing switched off (ROUTING_URL=off)
+  UNAVAILABLE = 'UNAVAILABLE', // provider error/timeout: try again later
+}
+
+/** A road route between two points; everything but the status is null without a real route. */
+export interface RoadBetween {
+  status: RoadStatus;
+  profile: string;
+  geometry: { type: 'LineString'; coordinates: [number, number][] } | null;
+  distanceMeters: number | null;
+  durationSeconds: number | null;
+  attribution: string;
+  computedAt: string;
+}
+
 const MAX_MAP_TILES = 40; // a single PDF map needs ~12–24; more means something's off
 
 export interface WeatherResult {
@@ -81,6 +99,10 @@ export class EnrichmentService {
 
   get routingProfile(): string {
     return this.routing.configured ? this.routing.profile : 'straight';
+  }
+
+  get routingAttribution(): string {
+    return this.routing.attribution;
   }
 
   /** Credit line to print wherever forecasts are shown. */
@@ -223,6 +245,42 @@ export class EnrichmentService {
       coordinates.push(...(coordinates.length ? line.slice(1) : line)); // legs share their end points
     }
     return this.assemble(failed ? RouteStatus.UNAVAILABLE : RouteStatus.PARTIAL, coordinates, legs);
+  }
+
+  /**
+   * Road route between two points (member routes on the Journey map). Unlike routeThrough there
+   * is never a straight-line stand-in: without a real road route, `geometry` and the numbers are
+   * null. Not cached here: RoutesService caches the answers in Redis. Never throws.
+   */
+  async roadBetween(a: RoutePoint, b: RoutePoint): Promise<RoadBetween> {
+    const empty = (status: RoadStatus): RoadBetween => ({
+      status,
+      profile: this.routingProfile,
+      geometry: null,
+      distanceMeters: null,
+      durationSeconds: null,
+      attribution: this.routing.attribution,
+      computedAt: new Date().toISOString(),
+    });
+    if (!this.routing.configured) return empty(RoadStatus.NOT_CONFIGURED);
+
+    let value: RoadBetween;
+    try {
+      const road = await this.routing.route([a, b]);
+      value = {
+        ...empty(RoadStatus.OK),
+        geometry: { type: 'LineString', coordinates: road.coordinates },
+        distanceMeters: Math.round(road.distanceMeters),
+        durationSeconds: Number.isFinite(road.durationSeconds) ? Math.round(road.durationSeconds) : null,
+      };
+    } catch (err) {
+      if (!(err instanceof NoRoadRouteError)) {
+        this.logger.warn(`Routing failed between two points: ${(err as Error).message}`);
+        return empty(RoadStatus.UNAVAILABLE);
+      }
+      value = empty(RoadStatus.NO_ROUTE);
+    }
+    return value;
   }
 
   private straightRoute(points: RoutePoint[], status: RouteStatus): TripRoute {

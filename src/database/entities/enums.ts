@@ -138,3 +138,9 @@ export enum MessageKind {
   LOCATION = 'LOCATION',
   VOICE = 'VOICE',
 }
+
+// Where a saved place came from: a provider result (nearby / search) or a pin dropped on the map.
+export enum SavedPlaceSource {
+  PROVIDER = 'PROVIDER',
+  PIN = 'PIN',
+}

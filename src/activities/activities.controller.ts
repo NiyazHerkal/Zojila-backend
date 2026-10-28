@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { GroupRole, type GroupMember } from '../database/entities/index.js';
@@ -6,9 +6,11 @@ import { CurrentMembership } from '../groups/decorators/current-membership.decor
 import { GroupMemberGuard, GroupRoles } from '../groups/guards/group-member.guard.js';
 import { ActivitiesService } from './activities.service.js';
 import {
+  ArrivalCheckDto,
   CreateActivityUpdateDto,
   EditActivityUpdateDto,
   ListActivityUpdatesQueryDto,
+  SetAttendanceDto,
   SetActivityStatusDto,
 } from './dto/activity.dto.js';
 
@@ -39,6 +41,38 @@ export class ActivitiesController {
     @CurrentMembership() membership: GroupMember,
   ) {
     return this.activities.setStatus(groupId, membership, activityId, dto.status);
+  }
+
+  @Get('activities/:activityId/attendance')
+  @ApiOperation({ summary: 'Who has arrived at this stop, with counts (members).' })
+  attendance(@Param('groupId') groupId: string, @Param('activityId', ParseUUIDPipe) activityId: string) {
+    return this.activities.attendance(groupId, activityId);
+  }
+
+  @Put('activities/:activityId/attendance/me')
+  @ApiOperation({ summary: 'Mark yourself arrived at this stop, or undo it (any member, self only). Idempotent.' })
+  setMyAttendance(
+    @Param('groupId') groupId: string,
+    @Param('activityId', ParseUUIDPipe) activityId: string,
+    @Body() dto: SetAttendanceDto,
+    @CurrentMembership() membership: GroupMember,
+  ) {
+    return this.activities.setMyAttendance(groupId, membership, activityId, dto.arrived);
+  }
+
+  @Post('activities/:activityId/arrival-check')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Is my position close enough to this stop to suggest "arrived"? Records nothing; confirm with PUT …/attendance/me.',
+  })
+  arrivalCheck(
+    @Param('groupId') groupId: string,
+    @Param('activityId', ParseUUIDPipe) activityId: string,
+    @Body() dto: ArrivalCheckDto,
+    @CurrentMembership() membership: GroupMember,
+  ) {
+    return this.activities.arrivalCheck(groupId, membership, activityId, dto);
   }
 
   @Get('activities/:activityId/updates')

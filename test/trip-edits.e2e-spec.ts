@@ -249,7 +249,7 @@ describe('Trip edits, profile pictures and the route map (e2e)', () => {
   });
 
   describe('route map', () => {
-    let draft: { revision: number; waypoints: { id: string; activityId: string }[] };
+    let draft: { revision: number; waypoints: { id: string; activityId: string; lat: number; lng: number }[] };
 
     it('joins the draft stops along roads, computed once and cached', async () => {
       await http().post(`${itin()}/draft`).set(as(alice)).expect(201);
@@ -284,7 +284,7 @@ describe('Trip edits, profile pictures and the route map (e2e)', () => {
       await http().patch(`${itin()}/draft/waypoints/${draft.waypoints[1].id}`).set(as(alice)).send({ name: 'Keylong town' }).expect(200);
       await http().get(`${itin()}/draft/route`).set(as(alice)).expect(200);
       expect(routeCalls).toBe(1);
-      await http().patch(`${itin()}/draft/waypoints/${draft.waypoints[1].id}`).set(as(alice)).send({ lat: 32.58 }).expect(200);
+      await http().patch(`${itin()}/draft/waypoints/${draft.waypoints[1].id}`).set(as(alice)).send({ lat: 32.58, lng: draft.waypoints[1].lng }).expect(200);
       await http().get(`${itin()}/draft/route`).set(as(alice)).expect(200);
       expect(routeCalls).toBe(2);
     });
@@ -299,7 +299,7 @@ describe('Trip edits, profile pictures and the route map (e2e)', () => {
       expect(partial.body.geometry.coordinates.at(-1)).toEqual([leh.lng, leh.lat]);
 
       routingDown = true;
-      await http().patch(`${itin()}/draft/waypoints/${draft.waypoints[3].id}`).set(as(alice)).send({ lng: 77.58 }).expect(200);
+      await http().patch(`${itin()}/draft/waypoints/${draft.waypoints[3].id}`).set(as(alice)).send({ lat: draft.waypoints[3].lat, lng: 77.58 }).expect(200);
       const down = await http().get(`${itin()}/draft/route`).set(as(alice)).expect(200);
       expect(down.body.status).toBe('UNAVAILABLE');
       expect(down.body.geometry.coordinates).toHaveLength(4); // straight through the 4 stops

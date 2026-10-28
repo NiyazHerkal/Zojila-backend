@@ -23,6 +23,7 @@ import { RealtimeService } from '../realtime/realtime.service.js';
 import { REDIS } from '../redis/redis.module.js';
 import type { LocationPointDto } from './dto/location.dto.js';
 import type { LivePosition } from './location.service.js';
+import { ErrorCode, withCode } from '../errors/error-codes.js';
 
 /** Socket events (change request v1.0 §15). Recipients get them on the `/live` namespace. */
 export const LIVE_SHARE_EVENTS = {
@@ -261,13 +262,13 @@ export class LiveShareService {
 
   private async redisCall<T>(fn: () => Promise<T>): Promise<T> {
     if (this.redis.status !== 'ready') {
-      throw new ServiceUnavailableException('Live location is temporarily unavailable (Redis is down)');
+      throw withCode(new ServiceUnavailableException('Live location is temporarily unavailable (Redis is down)'), ErrorCode.LIVE_LOCATION_UNAVAILABLE);
     }
     try {
       return await fn();
     } catch (err) {
       this.logger.warn(`Redis command failed: ${(err as Error).message}`);
-      throw new ServiceUnavailableException('Live location is temporarily unavailable (Redis is down)');
+      throw withCode(new ServiceUnavailableException('Live location is temporarily unavailable (Redis is down)'), ErrorCode.LIVE_LOCATION_UNAVAILABLE);
     }
   }
 }

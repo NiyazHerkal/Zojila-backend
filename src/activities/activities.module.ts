@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module.js';
-import { ActivityProgress, ActivityUpdate, Itinerary, Waypoint } from '../database/entities/index.js';
+import { ActivityAttendance, ActivityProgress, ActivityUpdate, GroupMember, Itinerary, Waypoint } from '../database/entities/index.js';
 import { GroupsModule } from '../groups/groups.module.js';
 import { ItineraryModule } from '../itinerary/itinerary.module.js';
 import { RealtimeModule } from '../realtime/realtime.module.js';
@@ -14,7 +14,7 @@ import { ActivitiesService } from './activities.service.js';
     GroupsModule,
     ItineraryModule,
     RealtimeModule,
-    TypeOrmModule.forFeature([ActivityProgress, ActivityUpdate, Itinerary, Waypoint]),
+    TypeOrmModule.forFeature([ActivityAttendance, ActivityProgress, ActivityUpdate, GroupMember, Itinerary, Waypoint]),
   ],
   controllers: [ActivitiesController],
   providers: [ActivitiesService],

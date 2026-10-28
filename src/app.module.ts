@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
-import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
+import { SentryModule } from '@sentry/nestjs/setup';
 import { AnalyticsModule } from './analytics/analytics.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
@@ -14,10 +14,13 @@ import { OfflineModule } from './offline/offline.module.js';
 import { PrivacyModule } from './privacy/privacy.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { DatabaseModule } from './database/database.module.js';
+import { ErrorCodeFilter } from './errors/error-code.filter.js';
 import { GroupsModule } from './groups/groups.module.js';
 import { ItineraryModule } from './itinerary/itinerary.module.js';
 import { ActivitiesModule } from './activities/activities.module.js';
 import { PlacesModule } from './places/places.module.js';
+import { RoutesModule } from './routes/routes.module.js';
+import { SavedPlacesModule } from './saved-places/saved-places.module.js';
 import { LocationModule } from './location/location.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { ProfileModule } from './profile/profile.module.js';
@@ -46,6 +49,8 @@ import { StatusModule } from './status/status.module.js';
     ItineraryModule,
     ActivitiesModule,
     PlacesModule,
+    RoutesModule,
+    SavedPlacesModule,
     RealtimeModule,
     ProfileModule,
     StatusModule,
@@ -62,8 +67,8 @@ import { StatusModule } from './status/status.module.js';
   providers: [
     AppService,
     { provide: APP_GUARD, useClass: HttpThrottlerGuard },
-    // Reports unexpected (5xx) errors to Sentry when SENTRY_DSN is set; otherwise just Nest's default handling.
-    { provide: APP_FILTER, useClass: SentryGlobalFilter },
+    // Adds a stable `code` to every error body; reports unexpected (5xx) errors to Sentry when SENTRY_DSN is set.
+    { provide: APP_FILTER, useClass: ErrorCodeFilter },
   ],
 })
 export class AppModule {}

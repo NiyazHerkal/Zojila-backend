@@ -295,6 +295,54 @@ describe('Itinerary (e2e)', () => {
       .expect(404);
   });
 
+  it('keeps start/end times, accepts past dates, and moves a pin only by a full lat/lng pair', async () => {
+    const draft = await http().get(`${base()}/draft`).set(as(alice)).expect(200);
+    const leh = draft.body.waypoints[1];
+    const pin = `${base()}/draft/waypoints/${leh.id}`;
+
+    for (const bad of [
+      { startTime: '9:00' },
+      { startTime: '24:00' },
+      { endTime: '18:00' }, // no start time
+      { startTime: '18:00', endTime: '18:00' },
+      { startTime: '18:00', endTime: '09:00' },
+      { lat: 34.1 }, // half a pair
+      { lng: 77.6 },
+    ]) {
+      await http().patch(pin).set(as(alice)).send(bad).expect(400);
+    }
+
+    const timed = await http()
+      .patch(pin)
+      .set(as(alice))
+      .send({ startTime: '16:00', endTime: '18:30', date: isoDay(-5) })
+      .expect(200);
+    expect(timed.body.waypoints[1]).toMatchObject({
+      startTime: '16:00',
+      endTime: '18:30',
+      date: isoDay(-5), // past dates are fine, only flagged when outside the trip
+      lat: leh.lat,
+      lng: leh.lng,
+    });
+    // An earlier end than the stored start is caught too.
+    await http().patch(pin).set(as(alice)).send({ endTime: '15:00' }).expect(400);
+    const noEnd = await http().patch(pin).set(as(alice)).send({ endTime: null }).expect(200);
+    expect(noEnd.body.waypoints[1]).toMatchObject({ startTime: '16:00', endTime: null });
+    await http().patch(pin).set(as(alice)).send({ endTime: '18:30', date: isoDay(30) }).expect(200);
+
+    const created = await http()
+      .post(`${base()}/draft/waypoints`)
+      .set(as(alice))
+      .send({ ...keylong, startTime: '07:00' })
+      .expect(201);
+    expect(created.body.waypoints[2]).toMatchObject({ name: 'Keylong', startTime: '07:00', endTime: null });
+    expect(created.body.waypoints[0]).toMatchObject({ startTime: null, endTime: null });
+    await http()
+      .delete(`${base()}/draft/waypoints/${created.body.waypoints[2].id}`)
+      .set(as(alice))
+      .expect(200);
+  });
+
   it('finalizes into version 1, which viewers can read and export as a PDF', async () => {
     const locked = await http()
       .post(`${base()}/draft/finalize`)
@@ -349,6 +397,7 @@ describe('Itinerary (e2e)', () => {
     });
     // The copy keeps enrichment, so nothing is re-fetched just to start editing.
     expect(draft.body.waypoints[1].elevation.meters).toBe(3524);
+    expect(draft.body.waypoints[1]).toMatchObject({ startTime: '16:00', endTime: '18:30' });
 
     await http()
       .patch(`${base()}/draft/waypoints/${draft.body.waypoints[1].id}`)

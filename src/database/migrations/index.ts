@@ -7,6 +7,9 @@ import { LocationShareLinks1791198170977 } from './1791198170977-LocationShareLi
 import { ChatVoiceAndLocation1791198713497 } from './1791198713497-ChatVoiceAndLocation.js';
 import { GroupCoverImage1791199500000 } from './1791199500000-GroupCoverImage.js';
 import { AvatarAndRoute1791200000000 } from './1791200000000-AvatarAndRoute.js';
+import { WaypointTimes1791201000000 } from './1791201000000-WaypointTimes.js';
+import { AttendanceAndSavedPlaces1791202000000 } from './1791202000000-AttendanceAndSavedPlaces.js';
+import { Notifications1791203000000 } from './1791203000000-Notifications.js';
 
 /**
  * Every migration, in order. Listed explicitly (not a file glob) so it works the same in
@@ -23,4 +26,7 @@ export const migrations: Function[] = [
   ChatVoiceAndLocation1791198713497,
   GroupCoverImage1791199500000,
   AvatarAndRoute1791200000000,
+  WaypointTimes1791201000000,
+  AttendanceAndSavedPlaces1791202000000,
+  Notifications1791203000000,
 ];

@@ -7,6 +7,7 @@ import { cert, getApps, initializeApp, type App, type ServiceAccount } from 'fir
 import { getMessaging, type Messaging } from 'firebase-admin/messaging';
 import { In, Repository } from 'typeorm';
 import { DeviceToken } from '../database/entities/index.js';
+import { FEED_PUSH_TYPES, NotificationFeedService } from './notification-feed.service.js';
 
 export interface PushMessage {
   title: string;
@@ -39,6 +40,7 @@ export class PushService implements OnModuleInit {
   constructor(
     private readonly config: ConfigService,
     @InjectRepository(DeviceToken) private readonly devices: Repository<DeviceToken>,
+    private readonly feed: NotificationFeedService,
   ) {}
 
   onModuleInit(): void {
@@ -63,9 +65,15 @@ export class PushService implements OnModuleInit {
     return this.sendToUsers([userId], message);
   }
 
-  /** Sends to every registered device of these users (e.g. a whole group). Never throws. */
+  /**
+   * Sends to every registered device of these users (e.g. a whole group). Never throws.
+   * Alert, trip and expense pushes (FEED_PUSH_TYPES) also go into each user's notifications feed,
+   * even for users with no device registered.
+   */
   async sendToUsers(userIds: string[], message: PushMessage): Promise<void> {
     if (!userIds.length) return;
+    const type = message.data?.type;
+    if (type && FEED_PUSH_TYPES.has(type)) await this.feed.record(userIds, { type, ...message });
     try {
       const tokens = (await this.devices.find({ where: { userId: In(userIds) }, select: { token: true } })).map(
         (d) => d.token,

@@ -578,7 +578,7 @@ describe('API_RESPONSES.md capture', () => {
     await call('Drop a pin (first pin = START)', 'post', '/groups/:groupId/itinerary/draft/waypoints', {
       as: alice,
       params: g,
-      body: { name: 'Manali', lat: 32.2432, lng: 77.1892, date: '2026-10-10', notes: 'Meet at the bus stand, 6 am' },
+      body: { name: 'Manali', lat: 32.2432, lng: 77.1892, date: '2026-10-10', startTime: '06:00', endTime: '07:30', notes: 'Meet at the bus stand, 6 am' },
     });
     await call('Finalize with only 1 pin', 'post', '/groups/:groupId/itinerary/draft/finalize', { as: alice, params: g, expect: 400 });
     await call('Drop a second pin (appended = END)', 'post', '/groups/:groupId/itinerary/draft/waypoints', {
@@ -602,6 +602,18 @@ describe('API_RESPONSES.md capture', () => {
       as: alice,
       params: { ...g, waypointId: pins[1].id },
       body: { notes: 'Fuel up: last pump for 365 km' },
+    });
+    await call('Move a pin with only lat (send lat and lng together)', 'patch', '/groups/:groupId/itinerary/draft/waypoints/:waypointId', {
+      as: alice,
+      params: { ...g, waypointId: pins[1].id },
+      body: { lat: 32.58 },
+      expect: 400,
+    });
+    await call('End time before the start time', 'patch', '/groups/:groupId/itinerary/draft/waypoints/:waypointId', {
+      as: alice,
+      params: { ...g, waypointId: pins[1].id },
+      body: { startTime: '18:00', endTime: '09:00' },
+      expect: 400,
     });
     await call('Edit with an outdated revision (If-Match)', 'patch', '/groups/:groupId/itinerary/draft/waypoints/:waypointId', {
       as: alice,
@@ -726,6 +738,34 @@ describe('API_RESPONSES.md capture', () => {
     });
     await call('Activities with status and update counts', 'get', '/groups/:groupId/activities', { as: bob, params: g });
 
+    section('Activities — attendance & arrival check');
+    await call('Arrival check: close to Keylong (suggest "arrived")', 'post', '/groups/:groupId/activities/:activityId/arrival-check', {
+      as: bob,
+      params: { ...g, activityId: keylong.activityId },
+      body: { lat: 32.5725, lng: 77.0326, accuracy: 12 },
+    });
+    await call('Arrival check: GPS fix too vague', 'post', '/groups/:groupId/activities/:activityId/arrival-check', {
+      as: bob,
+      params: { ...g, activityId: keylong.activityId },
+      body: { lat: 32.5725, lng: 77.0326, accuracy: 250 },
+    });
+    ev = on(alice.socket!, 'activity:attendance_updated');
+    await call('Mark myself arrived', 'put', '/groups/:groupId/activities/:activityId/attendance/me', {
+      as: bob,
+      params: { ...g, activityId: keylong.activityId },
+      body: { arrived: true },
+    });
+    await shown(ev, 'activity:attendance_updated', 'Alice');
+    await call('Same again (retry: nothing changes, no event)', 'put', '/groups/:groupId/activities/:activityId/attendance/me', {
+      as: bob,
+      params: { ...g, activityId: keylong.activityId },
+      body: { arrived: true },
+    });
+    await call('Who has arrived', 'get', '/groups/:groupId/activities/:activityId/attendance', {
+      as: alice,
+      params: { ...g, activityId: keylong.activityId },
+    });
+
     // ============================================================ status
     section('Trip status');
     await call('Current status (nobody has set one)', 'get', '/groups/:groupId/status', { as: bob, params: g });
@@ -766,6 +806,27 @@ describe('API_RESPONSES.md capture', () => {
     await call('Invalid coordinates', 'post', '/location', { as: bob, body: { points: [{ lat: 100, lng: 77 }] }, expect: 400 });
     await call('The groups I share with', 'get', '/location/sharing', { as: bob });
     await call('Group map feed', 'get', '/groups/:groupId/location', { as: alice, params: g });
+
+    section('Member routes (Journey map)');
+    out.push('_Real OSRM road routes between live positions. Arrays are shortened here: `geometry.coordinates` has every point of the road line._\n');
+    await call('Alice starts sharing too', 'put', '/groups/:groupId/location/share', { as: alice, params: g, body: { duration: 'ONE_HOUR' } });
+    await call('Alice sends her position', 'post', '/groups/:groupId/location', { as: alice, params: g, body: { points: [{ lat: 32.2432, lng: 77.1892, accuracy: 5 }] } });
+    await call('Routes between every pair (Carol is not sharing)', 'get', '/groups/:groupId/routes/members', {
+      as: alice,
+      params: g,
+      query: { userIds: [alice.id, bob.id, carol.id].join(',') },
+      abbreviate: true,
+    });
+    await call('From my position to a member', 'get', '/groups/:groupId/routes/point-to-point', {
+      as: alice,
+      params: g,
+      query: { fromLat: 32.2432, fromLng: 77.1892, toUserId: bob.id },
+      abbreviate: true,
+    });
+    await call('Only one member', 'get', '/groups/:groupId/routes/members', { as: alice, params: g, query: { userIds: alice.id }, expect: 400 });
+    await call('Alice stops sharing', 'delete', '/groups/:groupId/location/share', { as: alice, params: g });
+
+    section('Live location (with the group), continued');
     await call('Switch to ALWAYS (no timer)', 'put', '/groups/:groupId/location/share', { as: bob, params: g, body: { duration: 'ALWAYS' } });
     ev = on(alice.socket!, 'location:sharing-stopped');
     await call('Stop sharing', 'delete', '/groups/:groupId/location/share', { as: bob, params: g });
@@ -824,6 +885,33 @@ describe('API_RESPONSES.md capture', () => {
       await call(title, 'get', path, { as: bob, query, expect: 'any' });
     }
     await call('Missing coordinates', 'get', '/location/garages', { as: bob, query: { radius: 3000 }, expect: 400 });
+
+    section('Place search');
+    out.push("_Real OpenStreetMap (Nominatim) results. The public server allows 1 search a second, so a `429`/`503` here would mean it was busy._\n");
+    const found = await call('Search by name, near Manali', 'get', '/places/search', {
+      as: bob,
+      query: { q: 'Hadimba Temple', lat: 32.2432, lng: 77.1892, limit: 3 },
+      expect: 'any',
+    });
+    await call('No match (empty list)', 'get', '/places/search', { as: bob, query: { q: 'zzqx nowhere qqzz' }, expect: 'any' });
+    await call('Too short', 'get', '/places/search', { as: bob, query: { q: 'a' }, expect: 400 });
+
+    section('Saved places');
+    const topResult = (found.body.results ?? [])[0] as { providerPlaceId: string; name: string; lat: number; lng: number; address: string } | undefined;
+    const place = topResult ?? { providerPlaceId: 'osm:way/26976402', name: 'Hadimba Devi Temple', lat: 32.2486, lng: 77.1803, address: null };
+    const saved = await call('Save a search result', 'post', '/me/saved-places', {
+      as: bob,
+      body: { providerPlaceId: place.providerPlaceId, name: place.name, lat: place.lat, lng: place.lng, address: place.address ?? undefined, category: 'temple' },
+    });
+    await call('Save the same place again (returns the first save)', 'post', '/me/saved-places', {
+      as: bob,
+      body: { providerPlaceId: place.providerPlaceId, name: place.name, lat: place.lat, lng: place.lng },
+      expect: 200,
+    });
+    await call('Save a pin dropped on the map', 'post', '/me/saved-places', { as: bob, body: { name: 'Campsite by the river', lat: 32.2612, lng: 77.1875 } });
+    await call('My saved places', 'get', '/me/saved-places', { as: bob });
+    await call("Someone else's saved place", 'delete', '/me/saved-places/:savedPlaceId', { as: alice, params: { savedPlaceId: saved.body.id }, expect: 404 });
+    await call('Remove a saved place', 'delete', '/me/saved-places/:savedPlaceId', { as: bob, params: { savedPlaceId: saved.body.id } });
 
     // ============================================================ presence + chat
     section('Presence');
@@ -1086,6 +1174,14 @@ describe('API_RESPONSES.md capture', () => {
     await call('Write to a closed trip', 'post', '/groups/:groupId/status', { as: bob, params: g, body: { status: 'ARRIVED' }, expect: 409 });
     await emitStep('Chat in a closed trip', bob, 'chat:send', { groupId, body: 'hello?' }, false);
     await call('Reopen the trip (admin)', 'post', '/groups/:groupId/reopen', { as: alice, params: g });
+
+    // ============================================================ notifications feed
+    section('Notifications feed');
+    out.push("_Everything above that concerned Bob: being added, role changes, new itinerary versions, alerts, expenses._\n");
+    const feed = await call("Bob's notifications (newest first)", 'get', '/notifications', { as: bob, query: { limit: 5 }, abbreviate: true });
+    await call('Unread count (badge)', 'get', '/notifications/unread-count', { as: bob });
+    await call('Mark one read', 'post', '/notifications/read', { as: bob, body: { ids: [feed.body.items[0].id] } });
+    await call('Mark all read', 'post', '/notifications/read', { as: bob, body: {} });
 
     // ============================================================ privacy
     section('Privacy — my data, delete my account');

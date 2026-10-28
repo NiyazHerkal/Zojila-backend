@@ -20,6 +20,7 @@ import {
 } from '../database/entities/index.js';
 import { CLOSED_TRIP_MESSAGE } from './guards/group-member.guard.js';
 import { InviteDeliveryService } from '../notifications/invite-delivery.service.js';
+import { NotificationFeedService, TRIP_FEED_TYPES } from '../notifications/notification-feed.service.js';
 import { GroupEventsService } from './group-events.service.js';
 import type { CreateInviteDto } from './dto/create-invite.dto.js';
 
@@ -36,6 +37,7 @@ export class InvitesService {
     private readonly dataSource: DataSource,
     private readonly config: ConfigService,
     private readonly delivery: InviteDeliveryService,
+    private readonly feed: NotificationFeedService,
     private readonly events: GroupEventsService,
   ) {}
 
@@ -99,6 +101,14 @@ export class InvitesService {
       `Sign in or sign up with this ${email ? 'email address' : 'phone number'} to accept.`;
     if (email) await this.delivery.sendEmail(email, `Join "${group.name}" on TravelGo`, text);
     if (phone) await this.delivery.sendSms(phone, text);
+    if (registered) {
+      await this.feed.record([registered.id], {
+        type: TRIP_FEED_TYPES.TRIP_INVITE,
+        title: 'Trip invite',
+        body: `${inviter.name} invited you to join "${group.name}"`,
+        data: { groupId, inviteId: invite.id },
+      });
+    }
 
     return this.toView(invite);
   }

@@ -18,6 +18,8 @@ export const RATE_LIMITS = {
   feedback: 10,
   liveShareView: 30, // a recipient's page polls every 10 s (6/min); several viewers can share an IP
   places: 30, // each call may reach OpenStreetMap's public Overpass server
+  placeSearch: 20, // search on submit, not per keystroke; the public Nominatim allows 1 req/s in total
+  routes: 60, // Journey map: one batch per member move (~50 m); pairs are cached ~5 min
 } as const;
 
 export const MINUTE_MS = 60_000;

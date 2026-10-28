@@ -7,6 +7,7 @@ import {
   DeviceToken,
   Expense,
   ExpenseSettlement,
+  ActivityAttendance,
   ActivityUpdate,
   ExpensePayment,
   ExpenseSplit,
@@ -18,8 +19,10 @@ import {
   InviteStatus,
   LocationShare,
   LocationShareLink,
+  Notification,
   Message,
   StatusUpdate,
+  SavedPlace,
   UsageDaily,
   User,
 } from '../database/entities/index.js';
@@ -58,7 +61,7 @@ export class AccountService {
   async export(userId: string) {
     const user = await this.activeUser(userId);
     const m = this.dataSource.manager;
-    const [memberships, messages, statuses, expensesPaid, expensesRecorded, shares, repayments, invitesSent, invitesReceived, devices, locationShares, feedback, activityUpdates, liveLinks] =
+    const [memberships, messages, statuses, expensesPaid, expensesRecorded, shares, repayments, invitesSent, invitesReceived, devices, locationShares, feedback, activityUpdates, liveLinks, savedPlaces, arrivals, notifications] =
       await Promise.all([
         m.find(GroupMember, { where: { userId }, relations: { group: true }, order: { joinedAt: 'ASC' } }),
         m.find(Message, { where: { senderId: userId }, order: { createdAt: 'ASC' } }),
@@ -74,6 +77,9 @@ export class AccountService {
         m.find(Feedback, { where: { userId }, order: { createdAt: 'ASC' } }),
         m.find(ActivityUpdate, { where: { userId, deletedAt: IsNull() }, order: { createdAt: 'ASC' } }),
         m.find(LocationShareLink, { where: { userId }, order: { startedAt: 'ASC' } }),
+        m.find(SavedPlace, { where: { userId }, order: { createdAt: 'ASC' } }),
+        m.find(ActivityAttendance, { where: { userId }, order: { arrivedAt: 'ASC' } }),
+        m.find(Notification, { where: { userId }, order: { createdAt: 'ASC' } }),
       ]);
 
     return {
@@ -153,6 +159,18 @@ export class AccountService {
         firstViewedAt: l.firstViewedAt,
       })),
       feedback: feedback.map((f) => ({ category: f.category, message: f.message, rating: f.rating, status: f.status, createdAt: f.createdAt })),
+      savedPlaces: savedPlaces.map((p) => ({
+        source: p.source,
+        providerPlaceId: p.providerPlaceId,
+        name: p.name,
+        lat: p.lat,
+        lng: p.lng,
+        address: p.address,
+        category: p.category,
+        savedAt: p.createdAt,
+      })),
+      activityArrivals: arrivals.map((a) => ({ groupId: a.groupId, activityId: a.stopKey, arrivedAt: a.arrivedAt })),
+      notifications: notifications.map((n) => ({ type: n.type, groupId: n.groupId, title: n.title, body: n.body, createdAt: n.createdAt, readAt: n.readAt })),
       notes: [
         'Live location positions are never stored: only your latest position is kept while you share, and removed when sharing ends.',
         'Receipt files are attached to the expenses they belong to; download them from the expense in the app.',
@@ -198,6 +216,9 @@ export class AccountService {
 
       await manager.delete(DeviceToken, { userId });
       await manager.delete(LocationShareLink, { userId });
+      await manager.delete(SavedPlace, { userId });
+      await manager.delete(ActivityAttendance, { userId });
+      await manager.delete(Notification, { userId });
       await manager.delete(UsageDaily, { userId });
       // Feedback can contain anything the person typed: it goes with the account (screenshots after commit).
       const reports = await manager.find(Feedback, { where: { userId }, select: { id: true } });

@@ -20,6 +20,7 @@ import { REDIS, redisOptions } from '../redis/redis.module.js';
 import { StatusService } from '../status/status.service.js';
 import type { LocationPointDto } from './dto/location.dto.js';
 import { LiveShareService } from './live-share.service.js';
+import { ErrorCode, withCode } from '../errors/error-codes.js';
 
 export const LOCATION_QUEUE = 'location-sharing';
 export const LocationEvents = {
@@ -364,9 +365,14 @@ export class LocationService implements OnModuleInit, OnApplicationShutdown {
     };
   }
 
+  /** 503 when live positions can't be read (Redis down). For callers outside this service. */
+  assertLiveAvailable(): void {
+    this.assertRedis();
+  }
+
   private assertRedis(): void {
     if (this.redis.status !== 'ready') {
-      throw new ServiceUnavailableException('Live location is temporarily unavailable (Redis is down)');
+      throw withCode(new ServiceUnavailableException('Live location is temporarily unavailable (Redis is down)'), ErrorCode.LIVE_LOCATION_UNAVAILABLE);
     }
   }
 
@@ -375,7 +381,7 @@ export class LocationService implements OnModuleInit, OnApplicationShutdown {
       return await fn();
     } catch (err) {
       this.logger.warn(`Redis command failed: ${(err as Error).message}`);
-      throw new ServiceUnavailableException('Live location is temporarily unavailable (Redis is down)');
+      throw withCode(new ServiceUnavailableException('Live location is temporarily unavailable (Redis is down)'), ErrorCode.LIVE_LOCATION_UNAVAILABLE);
     }
   }
 }

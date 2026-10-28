@@ -12,6 +12,9 @@ import {
   MinLength,
 } from 'class-validator';
 
+/** 24-hour wall-clock time, e.g. 09:05 or 18:30. */
+export const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export class CreateWaypointDto {
   @ApiProperty({ example: 'Manali', description: 'Place name shown on the pin' })
   @IsString()
@@ -36,6 +39,22 @@ export class CreateWaypointDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'date must be YYYY-MM-DD' })
   @IsDateString({ strict: true })
   date?: string | null;
+
+  @ApiPropertyOptional({
+    example: '16:00',
+    description: 'Start time (HH:mm, 24 h), local time at the stop like `date`. `null` clears it.',
+  })
+  @IsOptional()
+  @Matches(HH_MM, { message: 'startTime must be HH:mm (00:00-23:59)' })
+  startTime?: string | null;
+
+  @ApiPropertyOptional({
+    example: '18:30',
+    description: 'End time (HH:mm, 24 h). Needs a startTime and must be after it (same day). `null` clears it.',
+  })
+  @IsOptional()
+  @Matches(HH_MM, { message: 'endTime must be HH:mm (00:00-23:59)' })
+  endTime?: string | null;
 
   @ApiPropertyOptional({ example: 'Fuel up before Rohtang Pass' })
   @IsOptional()

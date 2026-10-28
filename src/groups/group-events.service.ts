@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { GroupMember, GroupRole } from '../database/entities/index.js';
+import { NotificationFeedService, TRIP_FEED_TYPES } from '../notifications/notification-feed.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 
 /** Socket event when the trip itself changes (details, dates, cover image, closed/reopened). */
@@ -43,6 +44,7 @@ export class GroupEventsService {
   constructor(
     private readonly realtime: RealtimeService,
     @InjectRepository(GroupMember) private readonly members: Repository<GroupMember>,
+    private readonly feed: NotificationFeedService,
   ) {}
 
   async memberJoined(groupId: string, userId: string, via: JoinedVia, addedBy: string | null): Promise<void> {
@@ -55,6 +57,13 @@ export class GroupEventsService {
       addedBy,
       timestamp: new Date(),
     });
+    // Joining by invite or link is the person's own doing; being added by an admin isn't.
+    if (via === 'DIRECT' && addedBy && addedBy !== userId) {
+      await this.feed.recordTripEvent([userId], TRIP_FEED_TYPES.MEMBER_ADDED, groupId, addedBy, (trip, actor) => ({
+        title: trip,
+        body: `${actor ?? 'An admin'} added you to "${trip}"`,
+      }));
+    }
   }
 
   /**
@@ -68,6 +77,12 @@ export class GroupEventsService {
     await this.realtime.emitToUser(userId, MEMBER_EVENTS.REMOVED, payload);
     if (wasSharing) {
       await this.realtime.emitToGroup(groupId, LOCATION_SHARING_STOPPED, { groupId, userId, reason: 'REMOVED' });
+    }
+    if (removedBy && removedBy !== userId) {
+      await this.feed.recordTripEvent([userId], TRIP_FEED_TYPES.MEMBER_REMOVED, groupId, removedBy, (trip, actor) => ({
+        title: trip,
+        body: `${actor ?? 'An admin'} removed you from "${trip}"`,
+      }));
     }
   }
 
@@ -87,5 +102,12 @@ export class GroupEventsService {
       changedBy,
       timestamp: new Date(),
     });
+    if (changedBy !== userId) {
+      const role = newRole === GroupRole.ADMIN ? 'an admin' : 'a viewer';
+      await this.feed.recordTripEvent([userId], TRIP_FEED_TYPES.ROLE_CHANGED, groupId, changedBy, (trip, actor) => ({
+        title: trip,
+        body: actor ? `${actor} made you ${role} of "${trip}"` : `You're now ${role} of "${trip}"`,
+      }), { newRole });
+    }
   }
 }

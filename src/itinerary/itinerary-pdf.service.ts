@@ -178,6 +178,8 @@ export class ItineraryPdfService {
     doc.font('Helvetica').fontSize(10).fillColor('#333');
 
     if (pin.date) doc.text(`Date: ${formatDate(pin.date)}`);
+    if (pin.startTime)
+      doc.text(`Time: ${pin.startTime}${pin.endTime ? `–${pin.endTime}` : ''}`);
     doc.text(`Location: ${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)}`);
 
     if (pin.elevation.status === 'OK') {

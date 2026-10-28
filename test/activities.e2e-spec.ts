@@ -255,6 +255,99 @@ describe('Activities: status + updates (e2e)', () => {
     ).toEqual(['COMPLETED', 'CURRENT', 'UPCOMING']);
   });
 
+  it('records per-member arrival: self only, live, idempotent, undoable', async () => {
+    const mine = g(`/activities/${keylong}/attendance/me`);
+    await http().get(g(`/activities/${keylong}/attendance`)).set(as(carol)).expect(404);
+    await http().put(mine).set(as(carol)).send({ arrived: true }).expect(404);
+    await http().put(mine).set(as(bob)).send({ arrived: 'yes' }).expect(400);
+    await http()
+      .put(g(`/activities/${randomUUID()}/attendance/me`))
+      .set(as(bob))
+      .send({ arrived: true })
+      .expect(404);
+
+    const event = next(bobSocket, 'activity:attendance_updated');
+    // A userId in the body is ignored: the token decides who arrived.
+    const res = await http().put(mine).set(as(bob)).send({ arrived: true, userId: alice.id }).expect(200);
+    expect(res.body).toMatchObject({ activityId: keylong, arrivedCount: 1, totalMembers: 2 });
+    const byId = (body: { members: { userId: string; arrived: boolean; arrivedAt: string | null }[] }) =>
+      Object.fromEntries(body.members.map((m) => [m.userId, m]));
+    expect(byId(res.body)[bob.id]).toMatchObject({ arrived: true, name: 'E2E bob' });
+    expect(byId(res.body)[bob.id].arrivedAt).toBeTruthy();
+    expect(byId(res.body)[alice.id]).toMatchObject({ arrived: false, arrivedAt: null });
+    expect(await event).toMatchObject({
+      groupId,
+      activityId: keylong,
+      userId: bob.id,
+      arrived: true,
+      arrivedCount: 1,
+      totalMembers: 2,
+    });
+
+    // A retry changes nothing and announces nothing.
+    const extra: unknown[] = [];
+    bobSocket.on('activity:attendance_updated', (e) => extra.push(e));
+    const again = await http().put(mine).set(as(bob)).send({ arrived: true }).expect(200);
+    expect(again.body.members.find((m: { userId: string }) => m.userId === bob.id).arrivedAt).toBe(
+      byId(res.body)[bob.id].arrivedAt,
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    bobSocket.off('activity:attendance_updated');
+    expect(extra).toHaveLength(0);
+
+    const list = await http().get(g('/activities')).set(as(alice)).expect(200);
+    expect(
+      list.body.activities.map((a: { name: string; arrivedCount: number; totalMembers: number }) => [
+        a.name,
+        a.arrivedCount,
+        a.totalMembers,
+      ]),
+    ).toEqual([
+      ['Manali', 0, 2],
+      ['Keylong', 1, 2],
+      ['Leh', 0, 2],
+    ]);
+
+    const undone = next(bobSocket, 'activity:attendance_updated');
+    const off = await http().put(mine).set(as(bob)).send({ arrived: false }).expect(200);
+    expect(off.body.arrivedCount).toBe(0);
+    expect(await undone).toMatchObject({ userId: bob.id, arrived: false, arrivedAt: null, arrivedCount: 0 });
+    await http().put(mine).set(as(bob)).send({ arrived: false }).expect(200); // nothing to undo: fine
+    await http().put(mine).set(as(bob)).send({ arrived: true }).expect(200);
+  });
+
+  it('suggests arrival from a position, without recording anything', async () => {
+    const check = g(`/activities/${keylong}/arrival-check`);
+    const near = { lat: 32.5725, lng: 77.0326, accuracy: 15 }; // ~111 m north of Keylong
+    await http().post(check).set(as(carol)).send(near).expect(404);
+    await http().post(check).set(as(alice)).send({ lat: 32.5725, lng: 77.0326 }).expect(400); // accuracy needed
+    await http().post(g(`/activities/${randomUUID()}/arrival-check`)).set(as(alice)).send(near).expect(404);
+
+    const ok = await http().post(check).set(as(alice)).send(near).expect(200);
+    expect(ok.body).toMatchObject({
+      activityId: keylong,
+      withinRadius: true,
+      radiusMeters: 200,
+      accepted: true,
+      reason: null,
+      alreadyArrived: false,
+    });
+    expect(ok.body.distanceMeters).toBeGreaterThan(100);
+    expect(ok.body.distanceMeters).toBeLessThan(120);
+    // Bob checked in during the previous test.
+    expect((await http().post(check).set(as(bob)).send(near).expect(200)).body.alreadyArrived).toBe(true);
+
+    const refused = async (body: object) => (await http().post(check).set(as(alice)).send(body).expect(200)).body;
+    expect(await refused({ ...near, lat: 32.6 })).toMatchObject({ withinRadius: false, accepted: false, reason: 'TOO_FAR' });
+    expect(await refused({ ...near, accuracy: 150 })).toMatchObject({ withinRadius: true, accepted: false, reason: 'ACCURACY_TOO_LOW' });
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(await refused({ ...near, recordedAt: old })).toMatchObject({ accepted: false, reason: 'POSITION_TOO_OLD' });
+
+    // Nothing was recorded for Alice.
+    const att = await http().get(g(`/activities/${keylong}/attendance`)).set(as(alice)).expect(200);
+    expect(att.body.arrivedCount).toBe(1);
+  });
+
   it('lets any member post updates, live, without duplicates on retry', async () => {
     const event = next(bobSocket, 'activity:update_added');
     const clientId = randomUUID();
