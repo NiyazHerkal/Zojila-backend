@@ -13,8 +13,8 @@ import { User } from './user.entity.js';
 
 /**
  * Two kinds of invite:
- * - LINK: multi-use shareable link. Only a SHA-256 hash of the token is stored; stays PENDING
- *   until it expires or an admin revokes it.
+ * - LINK: multi-use shareable link plus a short code for the same invite. Only SHA-256 hashes
+ *   of the token and code are stored; stays PENDING until it expires or an admin revokes it.
  * - SMS / EMAIL: addressed to one person (invitee email/phone, plus their user id if already
  *   registered). Shows up in their pending invitations; they accept or reject once.
  */
@@ -28,6 +28,10 @@ export class Invite {
 
   @Column({ name: 'token_hash', type: 'varchar', unique: true, nullable: true })
   tokenHash!: string | null;
+
+  /** LINK only: hash of the short code people type in (e.g. 7K2Q-MX4P). Null for older links. */
+  @Column({ name: 'code_hash', type: 'varchar', unique: true, nullable: true })
+  codeHash!: string | null;
 
   @Column({ type: 'enum', enum: InviteChannel })
   channel!: InviteChannel;

@@ -8,7 +8,7 @@ import { In, Repository } from 'typeorm';
 import { AppModule } from './../src/app.module.js';
 import { User } from './../src/database/entities/index.js';
 import { OtpDeliveryService } from './../src/notifications/otp-delivery.service.js';
-import { GeocodingProvider, type FoundPlace } from './../src/places/geocoding.provider.js';
+import { GeocodingProvider, type FoundPlace, type PlaceDetails } from './../src/places/geocoding.provider.js';
 import { REDIS } from './../src/redis/redis.module.js';
 
 // Place search by name (backend handover 2026-10-22, P-06). The provider is faked; the real
@@ -20,6 +20,7 @@ describe('Place search (e2e)', () => {
   const calls: { query: string; near: { lat: number; lng: number } | null; limit: number }[] = [];
   let fail: string | null = null;
   let configured = true;
+  let redisReady = false;
   let token: string;
   let userId: string;
   const suffix = randomUUID().slice(0, 8);
@@ -33,6 +34,16 @@ describe('Place search (e2e)', () => {
     category: 'aeroway',
     type: 'aerodrome',
   };
+  const details: PlaceDetails = {
+    ...airport,
+    openingHours: '24/7',
+    phone: '+91 832 254 0806',
+    website: null,
+    email: null,
+    cuisine: null,
+    brand: null,
+  };
+  const detailCalls: string[] = [];
   const fake: GeocodingProvider = {
     name: 'fake-nominatim',
     attribution: '© OpenStreetMap contributors',
@@ -43,6 +54,11 @@ describe('Place search (e2e)', () => {
       calls.push({ query, near, limit });
       if (fail) throw new Error(fail);
       return query.includes('nowhere') ? [] : [airport];
+    },
+    details: async (id) => {
+      detailCalls.push(id);
+      if (fail) throw new Error(fail);
+      return id === airport.providerPlaceId ? details : null;
     },
   };
 
@@ -65,8 +81,12 @@ describe('Place search (e2e)', () => {
     users = moduleFixture.get(getRepositoryToken(User));
     const redis = moduleFixture.get<Redis>(REDIS);
     for (let i = 0; redis.status !== 'ready' && i < 20; i++) await new Promise((r) => setTimeout(r, 100));
-    if (redis.status === 'ready') {
-      const keys = await redis.keys('travelgo:place-search:fake-nominatim:*');
+    redisReady = redis.status === 'ready';
+    if (redisReady) {
+      const keys = [
+        ...(await redis.keys('travelgo:place-search:fake-nominatim:*')),
+        ...(await redis.keys('travelgo:place-details:fake-nominatim:*')),
+      ];
       if (keys.length) await redis.del(...keys);
     }
 
@@ -124,5 +144,26 @@ describe('Place search (e2e)', () => {
     configured = false;
     await get(`/places/search?q=off-${suffix}`).expect(503);
     configured = true;
+  });
+
+  it('gives one place’s details by its providerPlaceId, cached', async () => {
+    await http().get(`/places/details?providerPlaceId=${airport.providerPlaceId}`).expect(401);
+    await get('/places/details').expect(400);
+    await get('/places/details?providerPlaceId=ola:abc').expect(400);
+    await get('/places/details?providerPlaceId=osm:node/1x').expect(400);
+
+    const id = encodeURIComponent(airport.providerPlaceId);
+    const res = await get(`/places/details?providerPlaceId=${id}`).expect(200);
+    expect(res.body).toEqual({ ...details, source: 'fake-nominatim', attribution: '© OpenStreetMap contributors' });
+    const before = detailCalls.length;
+    await get(`/places/details?providerPlaceId=${id}`).expect(200);
+    if (redisReady) expect(detailCalls.length).toBe(before); // second time from the cache
+
+    await get('/places/details?providerPlaceId=osm:node/1').expect(404);
+    fail = 'HTTP 429 from nominatim.openstreetmap.org';
+    await get('/places/details?providerPlaceId=osm:node/2').expect(429);
+    fail = 'timeout';
+    await get('/places/details?providerPlaceId=osm:node/3').expect(503);
+    fail = null;
   });
 });

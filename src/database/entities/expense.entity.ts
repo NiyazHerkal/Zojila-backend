@@ -53,6 +53,10 @@ export class Expense {
   @Column({ type: 'varchar', length: 500, nullable: true })
   description!: string | null;
 
+  // Free-text details; `description` stays the expense's name.
+  @Column({ type: 'text', nullable: true })
+  notes!: string | null;
+
   @Column({ name: 'split_type', type: 'enum', enum: SplitType })
   splitType!: SplitType;
 

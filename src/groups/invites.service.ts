@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, FindOptionsWhere, MoreThan, Repository } from 'typeorm';
+import { DataSource, EntityManager, FindOptionsWhere, MoreThan, QueryFailedError, Repository } from 'typeorm';
 import {
   Group,
   GroupMember,
@@ -26,6 +26,10 @@ import type { CreateInviteDto } from './dto/create-invite.dto.js';
 
 const DEFAULT_INVITE_TTL_DAYS = 7;
 const DEFAULT_INVITE_LINK_BASE_URL = 'https://travelgo.app/invite';
+// Short codes: 8 characters without look-alikes (no 0/O, 1/I/L), shown as XXXX-XXXX.
+const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+const CODE_LENGTH = 8;
+const CODE_PATTERN = new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH}}$`);
 
 @Injectable()
 export class InvitesService {
@@ -47,18 +51,27 @@ export class InvitesService {
     const expiresAt = new Date(Date.now() + (dto.expiresInDays ?? DEFAULT_INVITE_TTL_DAYS) * 86_400_000);
 
     if (dto.channel === InviteChannel.LINK) {
-      // Raw token is returned once and never stored — only its hash.
+      // Raw token and code are returned once and never stored — only their hashes.
       const token = randomBytes(32).toString('base64url');
-      const invite = await this.invites.save(
-        this.invites.create({
-          groupId,
-          channel: InviteChannel.LINK,
-          tokenHash: this.hashToken(token),
-          invitedById: inviterId,
-          expiresAt,
-        }),
-      );
-      return { ...this.toView(invite), token, link: `${this.linkBaseUrl()}/${token}` };
+      for (let attempt = 1; ; attempt++) {
+        const code = newInviteCode();
+        try {
+          const invite = await this.invites.save(
+            this.invites.create({
+              groupId,
+              channel: InviteChannel.LINK,
+              tokenHash: this.hashToken(token),
+              codeHash: this.hashToken(code),
+              invitedById: inviterId,
+              expiresAt,
+            }),
+          );
+          return { ...this.toView(invite), token, code: formatCode(code), link: `${this.linkBaseUrl()}/${token}` };
+        } catch (err) {
+          // ~10^12 possible codes, so a clash is very unlikely; pick another code and retry.
+          if (attempt >= 3 || !(err instanceof QueryFailedError) || (err.driverError as { code?: string }).code !== '23505') throw err;
+        }
+      }
     }
 
     const email = dto.channel === InviteChannel.EMAIL ? dto.email : undefined;
@@ -198,17 +211,20 @@ export class InvitesService {
 
   // --- internals ---
 
-  private async findActiveLink(token: string): Promise<Invite> {
+  /** `tokenOrCode` is the link token or the short code (any case, spaces/dashes ignored). */
+  private async findActiveLink(tokenOrCode: string): Promise<Invite> {
+    const code = tokenOrCode.toUpperCase().replace(/[\s-]/g, '');
+    const match = CODE_PATTERN.test(code) ? { codeHash: this.hashToken(code) } : { tokenHash: this.hashToken(tokenOrCode) };
     const invite = await this.invites.findOne({
       where: {
-        tokenHash: this.hashToken(token),
+        ...match,
         channel: InviteChannel.LINK,
         status: InviteStatus.PENDING,
         expiresAt: MoreThan(new Date()),
       },
       relations: { group: true, invitedBy: true },
     });
-    if (!invite) throw new NotFoundException('Invite link is invalid, revoked or expired');
+    if (!invite) throw new NotFoundException('Invite link or code is invalid, revoked or expired');
     return invite;
   }
 
@@ -237,6 +253,7 @@ export class InvitesService {
   }
 
   // Link tokens are 256-bit random, so a fast hash is enough (same reasoning as refresh tokens).
+  // Short codes are weaker (~40 bits) but live at most 30 days and the lookup routes are rate-limited.
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
   }
@@ -267,4 +284,12 @@ export class InvitesService {
     const { id, name, description, tripStart, tripEnd } = group;
     return { id, name, description, tripStart, tripEnd };
   }
+}
+
+function newInviteCode(): string {
+  return Array.from({ length: CODE_LENGTH }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join('');
+}
+
+function formatCode(code: string): string {
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
 }

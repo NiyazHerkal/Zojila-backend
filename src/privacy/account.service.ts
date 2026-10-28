@@ -125,6 +125,7 @@ export class AccountService {
           category: e.category,
           date: e.spentOn,
           description: e.description,
+          notes: e.notes,
           hasReceipt: !!e.receiptKey,
           createdAt: e.createdAt,
         }))

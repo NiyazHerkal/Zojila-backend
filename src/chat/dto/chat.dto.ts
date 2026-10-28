@@ -51,6 +51,7 @@ export class SharedLocationDto {
 /**
  * `chat:send`. `kind` TEXT (default; emoji are just text) needs `body`; LOCATION needs
  * `location`, and `body` is an optional caption. Voice messages are uploaded over HTTP.
+ * Forwarding sends only `forwardFromMessageId`: the server copies that message.
  */
 export class SendMessageDto {
   @IsUUID(undefined, { message: 'groupId must be a UUID' })
@@ -63,7 +64,9 @@ export class SendMessageDto {
   kind?: MessageKind.TEXT | MessageKind.LOCATION;
 
   // Required for TEXT (checked in ChatService, after trimming); an optional caption for LOCATION.
-  @ValidateIf((o: SendMessageDto) => o.kind !== MessageKind.LOCATION || o.body !== undefined)
+  @ValidateIf(
+    (o: SendMessageDto) => (o.kind !== MessageKind.LOCATION && o.forwardFromMessageId === undefined) || o.body !== undefined,
+  )
   @trim()
   @IsString({ message: 'body must be a string' })
   @MaxLength(MESSAGE_MAX_LENGTH, { message: `body must be at most ${MESSAGE_MAX_LENGTH} characters` })
@@ -81,6 +84,16 @@ export class SendMessageDto {
   @IsString({ message: 'clientMsgId must be a string' })
   @Length(1, 64, { message: 'clientMsgId must be 1–64 characters' })
   clientMsgId?: string;
+
+  // The message this one answers (same group).
+  @IsOptional()
+  @IsUUID(undefined, { message: 'replyToMessageId must be a UUID' })
+  replyToMessageId?: string;
+
+  // A message to forward, from any group the sender is in. Nothing else is sent with it.
+  @IsOptional()
+  @IsUUID(undefined, { message: 'forwardFromMessageId must be a UUID' })
+  forwardFromMessageId?: string;
 }
 
 /** `chat:typing` */
@@ -108,6 +121,11 @@ export class SendVoiceDto {
   @IsString()
   @Length(1, 64)
   clientMsgId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'The message this voice message answers (same group)' })
+  @IsOptional()
+  @IsUUID()
+  replyToMessageId?: string;
 }
 
 export class MarkReadDto {

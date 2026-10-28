@@ -35,7 +35,7 @@ export class ExpenseReportService {
   /** One row per expense and per repayment. Starts with a BOM so Excel reads UTF-8 (₹, names). */
   private csv({ expenses, settlements }: ReportData): string {
     const rows: (string | number)[][] = [
-      ['Type', 'Date', 'Category', 'Description', 'Paid by', 'Amount', 'Currency', 'Split', 'Shares'],
+      ['Type', 'Date', 'Category', 'Description', 'Paid by', 'Amount', 'Currency', 'Split', 'Shares', 'Notes'],
     ];
     for (const e of expenses) {
       rows.push([
@@ -48,6 +48,7 @@ export class ExpenseReportService {
         e.currency,
         e.splitType,
         e.splits.map((s) => `${s.name}: ${s.amount.toFixed(2)}`).join('; '),
+        e.notes ?? '',
       ]);
     }
     for (const s of settlements) {

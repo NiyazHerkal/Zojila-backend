@@ -42,6 +42,13 @@ export class PlaceSearchQueryDto {
   limit?: number;
 }
 
+export class PlaceDetailsQueryDto {
+  @ApiProperty({ example: 'osm:node/795826239' })
+  @IsString()
+  @MaxLength(200)
+  providerPlaceId!: string;
+}
+
 /** Search real places by name (backend handover 2026-10-22, P-06). Signed-in users only. */
 @ApiTags('places')
 @ApiBearerAuth()
@@ -64,5 +71,17 @@ export class PlaceSearchController {
       near: q.lat !== undefined && q.lng !== undefined ? { lat: q.lat, lng: q.lng } : null,
       limit: q.limit ?? DEFAULT_LIMIT,
     });
+  }
+
+  // A query parameter, not a path segment: the ids contain "/" (osm:node/123), which proxies mangle.
+  @Get('details')
+  @Throttle(perMinute(RATE_LIMITS.placeSearch))
+  @ApiOperation({
+    summary:
+      'One place by its providerPlaceId (from search, nearby places or saved places): address, opening hours, phone, ' +
+      'website when OpenStreetMap has them. 404 if unknown; 429 / 503 if the provider is busy or down.',
+  })
+  details(@Query() q: PlaceDetailsQueryDto) {
+    return this.search.details(q.providerPlaceId);
   }
 }

@@ -333,6 +333,22 @@ describe('Groups & membership (e2e)', () => {
     await http().get('/invites/link/bogus-token').set(as(dave)).expect(404);
   });
 
+  it('the same share link also has a short code people can type in', async () => {
+    const link = await http().post(`/groups/${groupId}/invites`).set(as(alice)).send({ channel: 'LINK' }).expect(201);
+    const { code } = link.body;
+    expect(code).toMatch(/^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$/);
+
+    // Case, spaces and the dash don't matter.
+    const typed = encodeURIComponent(` ${code.replace('-', '').toLowerCase()} `);
+    const preview = await http().get(`/invites/link/${typed}`).set(as(dave)).expect(200);
+    expect(preview.body).toMatchObject({ group: { id: groupId }, alreadyMember: true });
+    await http().post(`/invites/link/${code}/accept`).set(as(dave)).expect(201);
+
+    await http().delete(`/groups/${groupId}/invites/${link.body.id}`).set(as(alice)).expect(200);
+    await http().get(`/invites/link/${code}`).set(as(dave)).expect(404);
+    await http().get('/invites/link/ZZZZ-ZZZZ').set(as(dave)).expect(404);
+  });
+
   it('removes members: admins remove anyone, members can leave, the last admin cannot', async () => {
     await http().delete(`/groups/${groupId}/members/${carol.id}`).set(as(bob)).expect(403);
     await http().delete(`/groups/${groupId}/members/${carol.id}`).set(as(alice)).expect(200);

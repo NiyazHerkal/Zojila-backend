@@ -72,6 +72,9 @@ export interface WaypointView {
   startTime: string | null;
   endTime: string | null;
   notes: string | null;
+  /** Where the stop was picked from (place search / nearby places); null for a dropped pin. */
+  address: string | null;
+  providerPlaceId: string | null;
   elevation: ElevationView;
   weather: WeatherResult;
   activity: ActivityState;
@@ -210,6 +213,8 @@ export class ItineraryService {
                 startTime: w.startTime,
                 endTime: w.endTime,
                 notes: w.notes,
+                address: w.address,
+                providerPlaceId: w.providerPlaceId,
                 elevation: w.elevation,
                 weatherJson: w.weatherJson,
               }),
@@ -255,6 +260,8 @@ export class ItineraryService {
           startTime,
           endTime,
           notes: dto.notes ?? null,
+          address: dto.address?.trim() || null,
+          providerPlaceId: dto.providerPlaceId ?? null,
           elevation,
           weatherJson: weather as unknown as Record<string, unknown>,
         }),
@@ -294,6 +301,11 @@ export class ItineraryService {
       if (!pin) throw new NotFoundException('Waypoint not found in the draft');
       if (dto.name != null) pin.name = dto.name;
       if (dto.notes !== undefined) pin.notes = dto.notes;
+      // A moved pin is no longer at the place it was picked from, unless the app says so.
+      if (dto.address !== undefined) pin.address = dto.address?.trim() || null;
+      else if (moved) pin.address = null;
+      if (dto.providerPlaceId !== undefined) pin.providerPlaceId = dto.providerPlaceId;
+      else if (moved) pin.providerPlaceId = null;
       Object.assign(pin, { lat, lng, date, startTime, endTime, elevation, weatherJson: weather });
       await manager.save(pin);
     }, expectedRevision);
@@ -558,6 +570,8 @@ export class ItineraryService {
       startTime: pin.startTime,
       endTime: pin.endTime,
       notes: pin.notes,
+      address: pin.address,
+      providerPlaceId: pin.providerPlaceId,
       elevation,
       weather: (pin.weatherJson as WeatherResult | null) ?? {
         status: WeatherStatus.UNAVAILABLE,

@@ -209,6 +209,8 @@ export class ItineraryPdfService {
       );
     }
 
+    if (pin.address)
+      doc.text(`Address: ${text(pin.address)}`, { width: CONTENT_WIDTH });
     if (pin.notes)
       doc.text(`Notes: ${text(pin.notes)}`, { width: CONTENT_WIDTH });
   }

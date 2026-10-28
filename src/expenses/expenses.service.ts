@@ -73,6 +73,7 @@ export interface ExpenseView {
   category: ExpenseCategory;
   date: string;
   description: string | null;
+  notes: string | null;
   splitType: SplitType;
   /** The main payer (whoever paid the most); everyone who paid is in `payments`. */
   paidBy: UserSummary;
@@ -193,6 +194,7 @@ export class ExpensesService {
             category: dto.category,
             spentOn: dto.date,
             description: dto.description?.trim() || null,
+            notes: dto.notes?.trim() || null,
             splitType: dto.splitType,
             clientId: dto.clientId ?? null,
           }),
@@ -366,6 +368,7 @@ export class ExpensesService {
           ...(dto.description !== undefined && {
             description: dto.description?.trim() || null,
           }),
+          ...(dto.notes !== undefined && { notes: dto.notes?.trim() || null }),
           ...(payments && { payerId: mainPayer(payments) }),
           splitType,
           updatedAt: new Date(),
@@ -1019,6 +1022,7 @@ export class ExpensesService {
       category: e.category,
       date: e.spentOn,
       description: e.description,
+      notes: e.notes,
       splitType: e.splitType,
       paidBy: userSummary(e.payer),
       payments,

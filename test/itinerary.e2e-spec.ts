@@ -343,6 +343,40 @@ describe('Itinerary (e2e)', () => {
       .expect(200);
   });
 
+  it('keeps the address and place id a stop was picked from, and drops them when the pin moves', async () => {
+    const picked = { address: 'Keylong, Lahaul and Spiti, Himachal Pradesh, India', providerPlaceId: 'osm:node/245789' };
+    const created = await http()
+      .post(`${base()}/draft/waypoints`)
+      .set(as(alice))
+      .send({ ...keylong, ...picked, address: `  ${picked.address} ` })
+      .expect(201);
+    const stop = created.body.waypoints[2];
+    expect(stop).toMatchObject({ name: 'Keylong', ...picked });
+    expect(created.body.waypoints[0]).toMatchObject({ address: null, providerPlaceId: null });
+    const pin = `${base()}/draft/waypoints/${stop.id}`;
+
+    for (const bad of [{ address: 'x'.repeat(501) }, { providerPlaceId: '' }, { providerPlaceId: 7 }]) {
+      await http().patch(pin).set(as(alice)).send(bad).expect(400);
+    }
+    // Other edits leave them alone; null clears one.
+    const renamed = await http().patch(pin).set(as(alice)).send({ name: 'Keylong town' }).expect(200);
+    expect(renamed.body.waypoints[2]).toMatchObject(picked);
+    const noAddress = await http().patch(pin).set(as(alice)).send({ address: null }).expect(200);
+    expect(noAddress.body.waypoints[2]).toMatchObject({ address: null, providerPlaceId: picked.providerPlaceId });
+
+    // Moving the pin means it's no longer that place, unless new ones come with the move.
+    const moved = await http().patch(pin).set(as(alice)).send({ lat: 32.6, lng: 77.05 }).expect(200);
+    expect(moved.body.waypoints[2]).toMatchObject({ address: null, providerPlaceId: null });
+    const repicked = await http()
+      .patch(pin)
+      .set(as(alice))
+      .send({ lat: 32.5717, lng: 77.0339, ...picked })
+      .expect(200);
+    expect(repicked.body.waypoints[2]).toMatchObject(picked);
+
+    await http().delete(pin).set(as(alice)).expect(200);
+  });
+
   it('finalizes into version 1, which viewers can read and export as a PDF', async () => {
     const locked = await http()
       .post(`${base()}/draft/finalize`)

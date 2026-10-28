@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -9,7 +10,7 @@ import {
   UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, QueryFailedError, Repository } from 'typeorm';
+import { In, IsNull, QueryFailedError, Repository } from 'typeorm';
 import {
   AlertCategory,
   type AlertLocation,
@@ -34,10 +35,12 @@ export const ChatEvents = {
   MESSAGE: 'chat:message', // to group: a new message or alert, for the chat timeline
   TYPING: 'chat:typing', // to the group except the typist
   READ: 'chat:read', // to group: a member's read marker moved
+  MESSAGE_DELETED: 'chat:message_deleted', // to group: a sender deleted their message
 } as const;
 
 const DEFAULT_PAGE = 50;
 const PUSH_PREVIEW_LENGTH = 120;
+const REPLY_PREVIEW_LENGTH = 100;
 
 export interface UserSummary {
   userId: string;
@@ -59,6 +62,17 @@ export interface AlertSummary {
   resolvedBy: UserSummary | null;
 }
 
+/** The message a reply answers, enough to draw the quote above the reply. */
+export interface ReplyPreview {
+  id: string;
+  sender: UserSummary;
+  type: MessageType;
+  kind: MessageKind;
+  /** The start of its text (or a location's label / caption); "" for voice and deleted messages. */
+  preview: string;
+  deleted: boolean;
+}
+
 export interface MessageView {
   id: string;
   groupId: string;
@@ -71,6 +85,12 @@ export interface MessageView {
   sender: UserSummary;
   location: AlertLocation | null;
   voice: { durationMs: number; contentType: string } | null;
+  /** The message this one answers; null if it isn't a reply. */
+  replyTo: ReplyPreview | null;
+  /** A copy of a message forwarded from somewhere (where from isn't shown). */
+  forwarded: boolean;
+  /** Set when the sender deleted it: body is "", location and voice are null. */
+  deletedAt: Date | null;
   createdAt: Date;
   /** Current members other than the sender whose read marker is at or past this message. */
   readByCount: number;
@@ -86,6 +106,8 @@ export interface NewMessage {
   category?: AlertCategory | null;
   location?: AlertLocation | null;
   clientMsgId?: string | null;
+  replyToId?: string | null;
+  forwarded?: boolean;
 }
 
 export const isAlert = (type: MessageType) => type !== MessageType.NORMAL;
@@ -137,7 +159,13 @@ export class ChatService {
   async sendMessage(
     groupId: string,
     userId: string,
-    input: { kind?: MessageKind; body?: string; location?: SharedLocationDto },
+    input: {
+      kind?: MessageKind;
+      body?: string;
+      location?: SharedLocationDto;
+      replyToMessageId?: string;
+      forwardFromMessageId?: string;
+    },
     clientMsgId?: string,
   ): Promise<MessageView> {
     const membership = await this.requireMember(groupId, userId);
@@ -146,13 +174,20 @@ export class ChatService {
       const existing = await this.findByClientMsgId(userId, clientMsgId);
       if (existing) return this.existingForResend(existing, groupId, userId);
     }
+    if (input.forwardFromMessageId) {
+      if (input.body !== undefined || input.location || input.replyToMessageId) {
+        throw new BadRequestException('To forward, send only forwardFromMessageId (no body, location or replyToMessageId)');
+      }
+      return this.forward(groupId, userId, input.forwardFromMessageId, clientMsgId);
+    }
 
     const kind = input.kind ?? MessageKind.TEXT;
     if (kind === MessageKind.TEXT && !input.body) throw new BadRequestException('body is required');
     if (kind !== MessageKind.LOCATION && input.location) {
       throw new BadRequestException('location is only for LOCATION messages (send kind: "LOCATION")');
     }
-    const message: NewMessage = { type: MessageType.NORMAL, kind, body: input.body ?? '', clientMsgId };
+    const replyToId = await this.replyTarget(groupId, input.replyToMessageId);
+    const message: NewMessage = { type: MessageType.NORMAL, kind, body: input.body ?? '', clientMsgId, replyToId };
     if (kind === MessageKind.LOCATION && input.location) {
       const { lat, lng, accuracy, label } = input.location;
       message.location = { lat, lng, accuracy: accuracy ?? null, recordedAt: new Date().toISOString(), source: 'DEVICE', label: label || null };
@@ -170,6 +205,7 @@ export class ChatService {
     file: { buffer: Buffer; size: number } | undefined,
     durationMs: number,
     clientMsgId?: string,
+    replyToMessageId?: string,
   ): Promise<MessageView> {
     if (clientMsgId) {
       const existing = await this.findByClientMsgId(userId, clientMsgId);
@@ -179,17 +215,56 @@ export class ChatService {
     if (file.size > VOICE_MAX_BYTES) throw new PayloadTooLargeException('A voice message must be 2 MB or smaller');
     const type = detectVoiceType(file.buffer);
     if (!type) throw new UnsupportedMediaTypeException('A voice message must be an AAC/M4A or Ogg audio recording');
+    const replyToId = await this.replyTarget(groupId, replyToMessageId);
 
     const key = `voice/${groupId}/${randomUUID()}.${type.extension}`;
     await this.storage.put(key, file.buffer, type.contentType);
+    return this.postWithRecording(
+      groupId,
+      userId,
+      { type: MessageType.NORMAL, kind: MessageKind.VOICE, body: '', voice: { key, contentType: type.contentType, durationMs }, clientMsgId, replyToId },
+      clientMsgId,
+    );
+  }
+
+  /**
+   * Forwards a chat message from any group the sender is in now: a copy (text, location, or a
+   * copy of the recording) marked `forwarded`, without saying where it came from.
+   */
+  private async forward(groupId: string, userId: string, sourceId: string, clientMsgId?: string): Promise<MessageView> {
+    const source = await this.messages.findOne({ where: { id: sourceId } });
+    // From a group the sender isn't in, the message doesn't exist for them.
+    if (!source || !(await this.access.findMembership(source.groupId, userId))) {
+      throw new NotFoundException('Message to forward not found');
+    }
+    if (source.type !== MessageType.NORMAL) throw new BadRequestException("Alerts can't be forwarded");
+    if (source.deletedAt) throw new BadRequestException("That message was deleted, so it can't be forwarded");
+
+    const message: NewMessage = {
+      type: MessageType.NORMAL,
+      kind: source.kind,
+      body: source.body,
+      location: source.location,
+      forwarded: true,
+      clientMsgId,
+    };
+    if (source.kind !== MessageKind.VOICE) return this.postChat(groupId, userId, message, clientMsgId);
+
+    // Each message owns its recording (deleting one mustn't silence the other), so copy it.
+    const data = source.voiceKey ? await this.storage.get(source.voiceKey) : null;
+    if (!data || !source.voiceKey || !source.voiceContentType) throw new NotFoundException('The recording is missing');
+    const key = `voice/${groupId}/${randomUUID()}.${source.voiceKey.split('.').pop()}`;
+    await this.storage.put(key, data, source.voiceContentType);
+    message.voice = { key, contentType: source.voiceContentType, durationMs: source.voiceDurationMs ?? 0 };
+    return this.postWithRecording(groupId, userId, message, clientMsgId);
+  }
+
+  /** Posts a message whose recording is already stored, and removes the file if it isn't used. */
+  private async postWithRecording(groupId: string, userId: string, message: NewMessage, clientMsgId?: string): Promise<MessageView> {
+    const key = message.voice!.key;
     let view: MessageView;
     try {
-      view = await this.postChat(
-        groupId,
-        userId,
-        { type: MessageType.NORMAL, kind: MessageKind.VOICE, body: '', voice: { key, contentType: type.contentType, durationMs }, clientMsgId },
-        clientMsgId,
-      );
+      view = await this.postChat(groupId, userId, message, clientMsgId);
     } catch (err) {
       await this.storage.delete(key).catch(() => undefined); // not posted: drop the file
       throw err;
@@ -200,6 +275,31 @@ export class ChatService {
       if (saved?.voiceKey !== key) await this.storage.delete(key).catch(() => undefined);
     }
     return view;
+  }
+
+  /**
+   * The sender deletes their own chat message (not alerts). It stays in the timeline as
+   * "deleted", with its text, location and recording wiped, so replies to it and read markers
+   * still line up. The group gets `chat:message_deleted`. Deleting again changes nothing.
+   */
+  async deleteMessage(groupId: string, userId: string, messageId: string): Promise<MessageView> {
+    const message = await this.messages.findOne({ where: { id: messageId, groupId } });
+    if (!message) throw new NotFoundException('Message not found');
+    if (message.type !== MessageType.NORMAL) throw new BadRequestException("Alerts can't be deleted");
+    if (message.senderId !== userId) throw new ForbiddenException('You can only delete your own messages');
+
+    if (!message.deletedAt) {
+      const deletedAt = new Date();
+      const result = await this.messages.update(
+        { id: message.id, deletedAt: IsNull() },
+        { deletedAt, body: '', location: null, voiceKey: null, voiceContentType: null, voiceDurationMs: null },
+      );
+      if (result.affected) {
+        if (message.voiceKey) await this.storage.delete(message.voiceKey).catch(() => undefined);
+        await this.realtime.emitToGroup(groupId, ChatEvents.MESSAGE_DELETED, { groupId, messageId: message.id, deletedAt });
+      }
+    }
+    return (await this.buildViews(groupId, [await this.loadMessage(message.id)], userId))[0];
   }
 
   /** The recording of a voice message, for any member. */
@@ -248,6 +348,8 @@ export class ChatService {
         voiceContentType: input.voice?.contentType ?? null,
         voiceDurationMs: input.voice?.durationMs ?? null,
         clientMsgId: input.clientMsgId ?? null,
+        replyToId: input.replyToId ?? null,
+        forwarded: input.forwarded ?? false,
       }),
     );
     const message = await this.loadMessage(saved.id);
@@ -292,6 +394,7 @@ export class ChatService {
       .createQueryBuilder('m')
       .where('m.group_id = :groupId', { groupId })
       .andWhere('m.sender_id <> :userId', { userId: membership.userId })
+      .andWhere('m.deleted_at IS NULL')
       .andWhere('m.created_at > :since', { since: marker?.lastReadAt ?? membership.joinedAt })
       .getCount();
     return {
@@ -353,11 +456,14 @@ export class ChatService {
   async buildViews(groupId: string, messages: Message[], viewerId: string): Promise<MessageView[]> {
     if (!messages.length) return [];
     const alertIds = messages.filter((m) => requiresAck(m.type)).map((m) => m.id);
-    const [memberIds, markers, acks] = await Promise.all([
+    const replyIds = [...new Set(messages.map((m) => m.replyToId).filter((id): id is string => !!id))];
+    const [memberIds, markers, acks, replyTargets] = await Promise.all([
       this.realtime.groupMemberIds(groupId),
       this.reads.find({ where: { groupId }, select: { userId: true, lastReadAt: true } }),
       alertIds.length ? this.acks.find({ where: { messageId: In(alertIds) }, select: { messageId: true, userId: true } }) : [],
+      replyIds.length ? this.messages.find({ where: { id: In(replyIds) }, relations: { sender: true } }) : [],
     ]);
+    const replies = new Map(replyTargets.map((t) => [t.id, replyPreview(t)]));
     const members = new Set(memberIds);
     const readUpTo = markers.map((r) => ({ userId: r.userId, at: r.lastReadAt.getTime() }));
     const ackedBy = new Map<string, Set<string>>();
@@ -379,6 +485,9 @@ export class ChatService {
         sender: userSummary(m.sender),
         location: m.location,
         voice: m.voiceKey && m.voiceContentType ? { durationMs: m.voiceDurationMs ?? 0, contentType: m.voiceContentType } : null,
+        replyTo: (m.replyToId && replies.get(m.replyToId)) || null,
+        forwarded: m.forwarded,
+        deletedAt: m.deletedAt,
         createdAt: m.createdAt,
         readByCount: readUpTo.filter((r) => r.userId !== m.senderId && members.has(r.userId) && r.at >= m.createdAt.getTime())
           .length,
@@ -406,6 +515,15 @@ export class ChatService {
   }
 
   // --- internals ---
+
+  /** Checks a reply's target: a message in the same group that hasn't been deleted. */
+  private async replyTarget(groupId: string, replyToMessageId?: string): Promise<string | null> {
+    if (!replyToMessageId) return null;
+    const target = await this.messages.findOne({ where: { id: replyToMessageId, groupId }, select: { id: true, deletedAt: true } });
+    if (!target) throw new BadRequestException('replyToMessageId must be a message in this group');
+    if (target.deletedAt) throw new BadRequestException("That message was deleted, so it can't be replied to");
+    return target.id;
+  }
 
   private findByClientMsgId(senderId: string, clientMsgId: string) {
     return this.messages.findOne({ where: { senderId, clientMsgId }, relations: { sender: true, resolvedBy: true } });
@@ -447,6 +565,18 @@ export class ChatService {
       data: { type: 'CHAT_MESSAGE', groupId: view.groupId, messageId: view.id },
     });
   }
+}
+
+function replyPreview(m: Message): ReplyPreview {
+  const text = m.kind === MessageKind.LOCATION ? m.location?.label || m.body : m.body;
+  return {
+    id: m.id,
+    sender: userSummary(m.sender),
+    type: m.type,
+    kind: m.kind,
+    preview: m.deletedAt ? '' : truncate(text, REPLY_PREVIEW_LENGTH),
+    deleted: !!m.deletedAt,
+  };
 }
 
 function pushPreview(view: MessageView): string {

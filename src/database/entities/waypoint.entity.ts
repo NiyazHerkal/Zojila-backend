@@ -61,6 +61,13 @@ export class Waypoint {
   @Column({ type: 'varchar', nullable: true })
   notes!: string | null;
 
+  // Set when the stop was picked from place search / nearby places, to tell similar names apart.
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  address!: string | null;
+
+  @Column({ name: 'provider_place_id', type: 'varchar', length: 200, nullable: true })
+  providerPlaceId!: string | null;
+
   // Meters above sea level, filled from the elevation provider. Null until fetched.
   @Column({ type: 'double precision', nullable: true })
   elevation!: number | null;

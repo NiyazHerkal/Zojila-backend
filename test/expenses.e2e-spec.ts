@@ -112,10 +112,11 @@ describe('Expenses (e2e)', () => {
     const res = await http()
       .post(url())
       .set(as(alice))
-      .send({ amount: 900, category: 'FUEL', date: '2026-10-11', description: 'Diesel at Tandi', splitType: 'EQUAL' })
+      .send({ amount: 900, category: 'FUEL', date: '2026-10-11', description: 'Diesel at Tandi', notes: '  Full tank, paid by card  ', splitType: 'EQUAL' })
       .expect(201);
     fuelId = res.body.id;
     expect(res.body).toMatchObject({ amount: 900, currency: 'INR', category: 'FUEL', date: '2026-10-11', splitType: 'EQUAL', myShare: 300, canEdit: true, hasReceipt: false });
+    expect(res.body).toMatchObject({ description: 'Diesel at Tandi', notes: 'Full tank, paid by card' });
     expect(res.body.paidBy.userId).toBe(alice.id);
     expect(res.body.payments).toEqual([expect.objectContaining({ userId: alice.id, amount: 900 })]);
     expect(res.body.splits.map((s: { amount: number }) => s.amount)).toEqual([300, 300, 300]);
@@ -218,6 +219,18 @@ describe('Expenses (e2e)', () => {
     await http().patch(url(`/${snacksId}`)).set(as(bob)).send({ description: 'Maggi + chai' }).expect(200);
     const edited = await http().patch(url(`/${snacksId}`)).set(as(alice)).send({ category: 'FOOD', description: null }).expect(200);
     expect(edited.body.description).toBeNull();
+  });
+
+  it('keeps notes separate from the name: set, left alone, cleared, and validated', async () => {
+    const withNotes = await http().patch(url(`/${snacksId}`)).set(as(bob)).send({ notes: 'Two plates each' }).expect(200);
+    expect(withNotes.body).toMatchObject({ notes: 'Two plates each', description: null });
+    const renamed = await http().patch(url(`/${snacksId}`)).set(as(bob)).send({ description: 'Maggi stop' }).expect(200);
+    expect(renamed.body).toMatchObject({ description: 'Maggi stop', notes: 'Two plates each' });
+    expect((await http().get(url(`/${snacksId}`)).set(as(alice)).expect(200)).body.notes).toBe('Two plates each');
+    const cleared = await http().patch(url(`/${snacksId}`)).set(as(bob)).send({ notes: null }).expect(200);
+    expect(cleared.body.notes).toBeNull();
+    await http().patch(url(`/${snacksId}`)).set(as(bob)).send({ notes: 'x'.repeat(2001) }).expect(400);
+    await http().patch(url(`/${snacksId}`)).set(as(bob)).send({ notes: 5 }).expect(400);
   });
 
   it('re-splits an EQUAL expense when the amount changes, but a CUSTOM one needs new shares', async () => {
@@ -334,6 +347,8 @@ describe('Expenses (e2e)', () => {
     const text = csv.text;
     expect(text.startsWith('﻿Type,Date,Category')).toBe(true);
     expect(text).toContain('EXPENSE,2026-10-11,FUEL,Diesel at Tandi');
+    expect(text.split('\n')[0].trim().endsWith(',Shares,Notes')).toBe(true);
+    expect(text).toContain('Full tank, paid by card');
     expect(text).toContain('REPAYMENT,2026-10-20,,UPI');
     await http().get(url('/report?format=xlsx')).set(as(bob)).expect(400);
   });

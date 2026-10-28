@@ -8,6 +8,7 @@ export const RATE_LIMITS = {
   signup: 10,
   login: 20,
   codeEntry: 10, // verify, otp/login, reset-password: guessing codes is the risk
+  inviteLink: 20, // link/code preview + join: short invite codes can be guessed
   codeSend: 5, // otp/request, forgot-password, resend-verification: each one sends an SMS/email
   refresh: 30,
   // SOS deliberately has no stricter limit: an emergency must never be refused (repeat taps

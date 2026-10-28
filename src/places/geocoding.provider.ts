@@ -16,6 +16,18 @@ export interface FoundPlace {
   type: string | null;
 }
 
+/** One place with whatever extra details the provider has (often only some of them). */
+export interface PlaceDetails extends FoundPlace {
+  /** The provider's own text, e.g. "Mo-Sa 09:00-18:00" or "24/7". */
+  openingHours: string | null;
+  phone: string | null;
+  website: string | null;
+  email: string | null;
+  /** e.g. "indian;regional" for restaurants. */
+  cuisine: string | null;
+  brand: string | null;
+}
+
 /** Search for named places (airports, hotels, beaches…). Abstract so the vendor can be swapped (and faked in tests). */
 export abstract class GeocodingProvider {
   abstract readonly name: string;
@@ -23,7 +35,12 @@ export abstract class GeocodingProvider {
   abstract readonly configured: boolean;
   /** Throws if the provider fails; an error message starting "HTTP 429" means it is rate-limiting us. */
   abstract search(query: string, near: { lat: number; lng: number } | null, limit: number): Promise<FoundPlace[]>;
+  /** One place by its `providerPlaceId`; null if the provider doesn't know it. Throws like `search`. */
+  abstract details(providerPlaceId: string): Promise<PlaceDetails | null>;
 }
+
+/** OpenStreetMap ids as used across the API: "osm:node/123", "osm:way/456", "osm:relation/789". */
+export const OSM_PLACE_ID = /^osm:(node|way|relation)\/(\d{1,15})$/;
 
 export const DEFAULT_GEOCODING_URL = 'https://nominatim.openstreetmap.org';
 const SEARCH_TIMEOUT_MS = 8_000;
@@ -41,6 +58,7 @@ interface NominatimResult {
   display_name?: string;
   category?: string;
   type?: string;
+  extratags?: Record<string, string> | null;
 }
 
 /**
@@ -77,6 +95,27 @@ export class NominatimGeocodingProvider extends GeocodingProvider {
     const res = await this.spaced(() => fetchWithTimeout(`${this.baseUrl}/search?${params}`, SEARCH_TIMEOUT_MS));
     const body = (await res.json()) as NominatimResult[];
     return body.map(toFoundPlace).filter((p): p is FoundPlace => p !== null);
+  }
+
+  async details(providerPlaceId: string): Promise<PlaceDetails | null> {
+    const match = OSM_PLACE_ID.exec(providerPlaceId);
+    if (!match) return null;
+    const osmIds = `${match[1][0].toUpperCase()}${match[2]}`; // N123 / W456 / R789
+    const params = new URLSearchParams({ osm_ids: osmIds, format: 'jsonv2', extratags: '1', 'accept-language': 'en' });
+    const res = await this.spaced(() => fetchWithTimeout(`${this.baseUrl}/lookup?${params}`, SEARCH_TIMEOUT_MS));
+    const [first] = (await res.json()) as NominatimResult[];
+    const place = first ? toFoundPlace(first) : null;
+    if (!place) return null;
+    const tag = (...keys: string[]) => keys.map((k) => first.extratags?.[k]?.trim()).find((v) => !!v) ?? null;
+    return {
+      ...place,
+      openingHours: tag('opening_hours'),
+      phone: tag('phone', 'contact:phone', 'contact:mobile'),
+      website: tag('website', 'contact:website', 'url'),
+      email: tag('email', 'contact:email'),
+      cuisine: tag('cuisine'),
+      brand: tag('brand'),
+    };
   }
 
   /** One call at a time, at least MIN_INTERVAL_MS apart. */

@@ -392,6 +392,134 @@ describe('Chat, alerts & SOS (e2e)', () => {
       await http().post(url('/messages/voice')).set(as(bob)).field('durationMs', '1000').expect(400); // no file
       await http().post(url('/messages/voice')).set(as(carol)).field('durationMs', '1000').attach('file', m4a, 'a.m4a').expect(404);
     });
+
+    describe('replies, deleting and forwarding (frontend request 2026-10-27)', () => {
+      let otherGroupId: string; // alice + carol: where messages get forwarded to
+      const send = (u: TestUser, payload: Record<string, unknown>, gid = groupId) =>
+        emit<Record<string, any>>(u.socket!, 'chat:send', { groupId: gid, ...payload });
+
+      beforeAll(async () => {
+        const other = await http()
+          .post('/groups')
+          .set(as(alice))
+          .send({ name: 'Forward target', description: 'd', tripStart: '2026-11-01T00:00:00Z', tripEnd: '2026-11-05T00:00:00Z' })
+          .expect(201);
+        otherGroupId = other.body.id;
+        await http().post(`/groups/${otherGroupId}/members`).set(as(alice)).send({ username: carol.username }).expect(201);
+      });
+
+      afterAll(async () => {
+        if (otherGroupId) await storage.deletePrefix(`voice/${otherGroupId}`);
+      });
+
+      it('replies to a message in the same group, quoting it', async () => {
+        const original = await send(bob, { body: 'Fuel at Tabo?' });
+        const reply = await send(alice, { body: 'Yes, fill up there', replyToMessageId: original.data!.id });
+        expect(reply).toMatchObject({ ok: true, data: { forwarded: false, deletedAt: null } });
+        expect(reply.data!.replyTo).toEqual({
+          id: original.data!.id,
+          sender: expect.objectContaining({ userId: bob.id }),
+          type: 'NORMAL',
+          kind: 'TEXT',
+          preview: 'Fuel at Tabo?',
+          deleted: false,
+        });
+        expect((await send(bob, { body: 'plain' })).data!.replyTo).toBeNull();
+
+        const voice = await http()
+          .post(url('/messages/voice'))
+          .set(as(bob))
+          .field('durationMs', '3000')
+          .field('replyToMessageId', reply.data!.id)
+          .attach('file', m4a, 'r.m4a')
+          .expect(201);
+        expect(voice.body.replyTo).toMatchObject({ id: reply.data!.id, preview: 'Yes, fill up there' });
+
+        const elsewhere = await send(alice, { body: 'other trip' }, otherGroupId);
+        expect(await send(alice, { body: 'x', replyToMessageId: elsewhere.data!.id })).toMatchObject({
+          ok: false,
+          error: { status: 400, message: 'replyToMessageId must be a message in this group' },
+        });
+        expect(await send(alice, { body: 'x', replyToMessageId: 'nope' })).toMatchObject({ ok: false, error: { status: 400 } });
+      });
+
+      it('lets only the sender delete a message; it stays as "deleted" and the group is told live', async () => {
+        const original = await send(bob, { body: 'Wrong group, sorry' });
+        const reply = await send(alice, { body: 'np', replyToMessageId: original.data!.id });
+        const id = original.data!.id;
+
+        await http().delete(url(`/messages/${id}`)).set(as(alice)).expect(403);
+        await http().delete(url(`/messages/${id}`)).set(as(carol)).expect(404);
+        await http().delete(url(`/messages/${randomUUID()}`)).set(as(bob)).expect(404);
+
+        const aliceHears = waitFor<Record<string, any>>(alice.socket!, 'chat:message_deleted', (p) => p.messageId === id);
+        const carolHears = receives(carol.socket!, 'chat:message_deleted');
+        const res = await http().delete(url(`/messages/${id}`)).set(as(bob)).expect(200);
+        expect(res.body).toMatchObject({ id, body: '', location: null, voice: null, deletedAt: expect.any(String) });
+        expect(await aliceHears).toEqual({ groupId, messageId: id, deletedAt: res.body.deletedAt });
+        expect(await carolHears).toBe(false);
+
+        // Deleting again changes nothing and isn't announced again.
+        const again = receives(alice.socket!, 'chat:message_deleted', (p) => p.messageId === id);
+        expect((await http().delete(url(`/messages/${id}`)).set(as(bob)).expect(200)).body.deletedAt).toBe(res.body.deletedAt);
+        expect(await again).toBe(false);
+
+        const history = await http().get(url('/messages')).set(as(dave)).expect(200);
+        const items = history.body.items as Record<string, any>[];
+        expect(items.find((m) => m.id === id)).toMatchObject({ body: '', deletedAt: res.body.deletedAt });
+        expect(items.find((m) => m.id === reply.data!.id)!.replyTo).toMatchObject({ id, preview: '', deleted: true });
+        expect((await http().get(url('/messages?search=Wrong%20group')).set(as(dave)).expect(200)).body.items).toHaveLength(0);
+
+        expect(await send(alice, { body: 'x', replyToMessageId: id })).toMatchObject({ ok: false, error: { status: 400 } });
+        expect(await send(alice, { forwardFromMessageId: id }, otherGroupId)).toMatchObject({ ok: false, error: { status: 400 } });
+      });
+
+      it('does not delete alerts', async () => {
+        const alert = await http().post(url('/alerts')).set(as(alice)).send({ type: 'GENERAL', body: 'Briefing at 7' }).expect(201);
+        await http().delete(url(`/messages/${alert.body.id}`)).set(as(alice)).expect(400);
+      });
+
+      it('deletes a voice message’s recording', async () => {
+        const voice = await http().post(url('/messages/voice')).set(as(bob)).field('durationMs', '2000').attach('file', m4a, 'v.m4a').expect(201);
+        await http().get(url(`/messages/${voice.body.id}/voice`)).set(as(alice)).expect(200);
+        await http().delete(url(`/messages/${voice.body.id}`)).set(as(bob)).expect(200);
+        await http().get(url(`/messages/${voice.body.id}/voice`)).set(as(alice)).expect(404);
+      });
+
+      it('forwards a copy into another group the sender is in, marked as forwarded', async () => {
+        const original = await send(bob, { kind: 'LOCATION', location: { lat: 32.09, lng: 78.38, label: 'Tabo monastery' }, body: 'meet here' });
+        const carolHears = waitFor<Record<string, any>>(carol.socket!, 'chat:message', (p) => p.forwarded === true);
+        const fwd = await send(alice, { forwardFromMessageId: original.data!.id, clientMsgId: randomUUID() }, otherGroupId);
+        expect(fwd).toMatchObject({
+          ok: true,
+          data: { groupId: otherGroupId, kind: 'LOCATION', body: 'meet here', forwarded: true, replyTo: null, sender: { userId: alice.id } },
+        });
+        expect(fwd.data!.location).toMatchObject({ lat: 32.09, lng: 78.38, label: 'Tabo monastery' });
+        expect((await carolHears).id).toBe(fwd.data!.id);
+
+        // Only from a group the sender is in, only chat messages, and nothing else in the payload.
+        expect(await send(carol, { forwardFromMessageId: original.data!.id }, otherGroupId)).toMatchObject({
+          ok: false,
+          error: { status: 404, message: 'Message to forward not found' },
+        });
+        expect(await send(alice, { forwardFromMessageId: original.data!.id, body: 'extra' }, otherGroupId)).toMatchObject({
+          ok: false,
+          error: { status: 400 },
+        });
+        const alert = await http().post(url('/alerts')).set(as(alice)).send({ type: 'GENERAL', body: 'Regroup' }).expect(201);
+        expect(await send(alice, { forwardFromMessageId: alert.body.id }, otherGroupId)).toMatchObject({ ok: false, error: { status: 400 } });
+      });
+
+      it('forwards a voice message as its own copy, which outlives the original', async () => {
+        const voice = await http().post(url('/messages/voice')).set(as(alice)).field('durationMs', '4200').attach('file', m4a, 'f.m4a').expect(201);
+        const fwd = await send(alice, { forwardFromMessageId: voice.body.id }, otherGroupId);
+        expect(fwd).toMatchObject({ ok: true, data: { kind: 'VOICE', forwarded: true, voice: { durationMs: 4200, contentType: 'audio/mp4' } } });
+
+        await http().delete(url(`/messages/${voice.body.id}`)).set(as(alice)).expect(200);
+        const audio = await http().get(`/groups/${otherGroupId}/messages/${fwd.data!.id}/voice`).set(as(carol)).buffer(true).expect(200);
+        expect(Buffer.compare(audio.body as Buffer, m4a)).toBe(0);
+      });
+    });
   });
 
   describe('alerts & SOS', () => {

@@ -63,6 +63,25 @@ export class CreateWaypointDto {
   notes?: string | null;
 
   @ApiPropertyOptional({
+    example: 'Gol Gumbaz Road, Vijayapura, Karnataka 586101, India',
+    description: 'The place’s address, e.g. from place search. `null` clears it.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  address?: string | null;
+
+  @ApiPropertyOptional({
+    example: 'osm:way/123456',
+    description: 'The `providerPlaceId` from place search or nearby places. `null` clears it.',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  providerPlaceId?: string | null;
+
+  @ApiPropertyOptional({
     example: 2,
     description: '1-based position to insert at (1 = new start point). Default: append as the new end point.',
   })

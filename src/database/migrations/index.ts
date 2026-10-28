@@ -10,6 +10,8 @@ import { AvatarAndRoute1791200000000 } from './1791200000000-AvatarAndRoute.js';
 import { WaypointTimes1791201000000 } from './1791201000000-WaypointTimes.js';
 import { AttendanceAndSavedPlaces1791202000000 } from './1791202000000-AttendanceAndSavedPlaces.js';
 import { Notifications1791203000000 } from './1791203000000-Notifications.js';
+import { InviteCodes1791204000000 } from './1791204000000-InviteCodes.js';
+import { ChatRepliesNotesPlaces1791205000000 } from './1791205000000-ChatRepliesNotesPlaces.js';
 
 /**
  * Every migration, in order. Listed explicitly (not a file glob) so it works the same in
@@ -29,4 +31,6 @@ export const migrations: Function[] = [
   WaypointTimes1791201000000,
   AttendanceAndSavedPlaces1791202000000,
   Notifications1791203000000,
+  InviteCodes1791204000000,
+  ChatRepliesNotesPlaces1791205000000,
 ];

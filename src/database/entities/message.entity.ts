@@ -88,6 +88,18 @@ export class Message {
   @Column({ name: 'resolved_by', type: 'uuid', nullable: true })
   resolvedById!: string | null;
 
+  // The message this one answers (same group). Kept if that message is deleted: it shows as deleted.
+  @Column({ name: 'reply_to_id', type: 'uuid', nullable: true })
+  replyToId!: string | null;
+
+  // A copy of another message the sender forwarded (where it came from isn't kept).
+  @Column({ default: false })
+  forwarded!: boolean;
+
+  // Deleted by its sender: body, location and voice are wiped and it shows as "deleted".
+  @Column({ name: 'deleted_at', type: 'timestamptz', precision: 3, nullable: true })
+  deletedAt!: Date | null;
+
   // timestamptz(3) = millisecond precision, matching JS Dates, so cursors and read markers compare exactly.
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz', precision: 3 })
   createdAt!: Date;
@@ -103,6 +115,10 @@ export class Message {
   @ManyToOne(() => User, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'resolved_by' })
   resolvedBy!: Relation<User> | null;
+
+  @ManyToOne(() => Message, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'reply_to_id' })
+  replyTo!: Relation<Message> | null;
 
   @OneToMany(() => MessageAck, (ack) => ack.message)
   acks!: Relation<MessageAck>[];

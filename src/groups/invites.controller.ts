@@ -1,5 +1,7 @@
 import { Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { perMinute, RATE_LIMITS } from '../security/rate-limit.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import type { JwtPayload } from '../auth/strategies/jwt.strategy.js';
@@ -32,13 +34,15 @@ export class InvitesController {
   }
 
   @Get('link/:token')
-  @ApiOperation({ summary: 'Preview the group behind a share link before joining.' })
+  @Throttle(perMinute(RATE_LIMITS.inviteLink))
+  @ApiOperation({ summary: 'Preview the group behind a share link or short invite code (e.g. 7K2Q-MX4P) before joining.' })
   previewLink(@CurrentUser() user: JwtPayload, @Param('token') token: string) {
     return this.invitesService.previewLink(user.sub, token);
   }
 
   @Post('link/:token/accept')
-  @ApiOperation({ summary: 'Join a group via share link — joins as a Viewer.' })
+  @Throttle(perMinute(RATE_LIMITS.inviteLink))
+  @ApiOperation({ summary: 'Join a group via share link or short invite code — joins as a Viewer.' })
   acceptLink(@CurrentUser() user: JwtPayload, @Param('token') token: string) {
     return this.invitesService.acceptLink(user.sub, token);
   }

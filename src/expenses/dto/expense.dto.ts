@@ -81,6 +81,16 @@ export class CreateExpenseDto {
   description?: string | null;
 
   @ApiPropertyOptional({
+    example: 'Paid in cash, receipt is with Bob',
+    maxLength: 2000,
+    description: 'Extra details. `description` stays the expense name.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  notes?: string | null;
+
+  @ApiPropertyOptional({
     format: 'uuid',
     description: 'Who paid the whole amount (a member). Defaults to you. Use `payments` instead when several people paid.',
   })
@@ -138,7 +148,7 @@ export class CreateExpenseDto {
 }
 
 /**
- * Send only what changes. `description: null` clears it. Changing the amount of an EQUAL
+ * Send only what changes. `description: null` / `notes: null` clear them. Changing the amount of an EQUAL
  * expense re-splits it between the same members; a CUSTOM one needs new `shares` too, and one
  * that several people paid needs new `payments`.
  */

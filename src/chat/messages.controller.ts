@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -71,7 +72,12 @@ export class MessagesController {
     schema: {
       type: 'object',
       required: ['file', 'durationMs'],
-      properties: { file: { type: 'string', format: 'binary' }, durationMs: { type: 'integer' }, clientMsgId: { type: 'string' } },
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        durationMs: { type: 'integer' },
+        clientMsgId: { type: 'string' },
+        replyToMessageId: { type: 'string', format: 'uuid' },
+      },
     },
   })
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: VOICE_MAX_BYTES + 1, files: 1 } }))
@@ -81,7 +87,20 @@ export class MessagesController {
     @Body() dto: SendVoiceDto,
     @UploadedFile() file: { buffer: Buffer; size: number } | undefined,
   ) {
-    return this.chat.sendVoice(groupId, user.sub, file, dto.durationMs, dto.clientMsgId);
+    return this.chat.sendVoice(groupId, user.sub, file, dto.durationMs, dto.clientMsgId, dto.replyToMessageId);
+  }
+
+  @Delete(':messageId')
+  @ApiOperation({
+    summary:
+      'Delete my own message (text, location or voice; not alerts). It stays in the chat as deleted, and the group gets `chat:message_deleted`.',
+  })
+  deleteMessage(
+    @Param('groupId') groupId: string,
+    @CurrentUser() user: JwtPayload,
+    @Param('messageId', ParseUUIDPipe) messageId: string,
+  ) {
+    return this.chat.deleteMessage(groupId, user.sub, messageId);
   }
 
   @Get(':messageId/voice')
