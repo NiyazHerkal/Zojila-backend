@@ -200,11 +200,11 @@ describe('Chat, alerts & SOS (e2e)', () => {
       expect(await emit(bob.socket!, 'chat:send', 'hello')).toMatchObject({ ok: false, error: { status: 400 } });
       expect(await emit(bob.socket!, 'chat:send', { groupId, body: '   ' })).toMatchObject({
         ok: false,
-        error: { status: 400, message: 'body is required' },
+        error: { status: 400, message: 'body is required', code: 'BAD_REQUEST' },
       });
       expect(await emit(bob.socket!, 'chat:send', { groupId, body: 'x'.repeat(2001) })).toMatchObject({
         ok: false,
-        error: { status: 400, message: 'body must be at most 2000 characters' },
+        error: { status: 400, message: 'body must be at most 2000 characters', code: 'VALIDATION_FAILED' },
       });
       expect(await emit(bob.socket!, 'chat:send', { groupId: 'nope', body: 'hi' })).toMatchObject({
         ok: false,
@@ -212,7 +212,7 @@ describe('Chat, alerts & SOS (e2e)', () => {
       });
       expect(await emit(carol.socket!, 'chat:send', { groupId, body: 'let me in' })).toMatchObject({
         ok: false,
-        error: { status: 404, message: 'Group not found' },
+        error: { status: 404, message: 'Group not found', code: 'NOT_FOUND' },
       });
     });
 

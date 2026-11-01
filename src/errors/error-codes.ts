@@ -34,7 +34,11 @@ export enum ErrorCode {
 
   // Features
   DRAFT_CHANGED = 'DRAFT_CHANGED', // itinerary If-Match mismatch (412)
+  DRAFT_EXISTS = 'DRAFT_EXISTS', // the group already has a draft itinerary (409)
+  TRIP_CLOSED = 'TRIP_CLOSED', // the trip is closed, so it's read-only (409)
   LIVE_LOCATION_UNAVAILABLE = 'LIVE_LOCATION_UNAVAILABLE', // Redis down (503)
+  FEATURE_UNAVAILABLE = 'FEATURE_UNAVAILABLE', // switched off on this server until approved (403)
+  NOTICE_OUTDATED = 'NOTICE_OUTDATED', // opting in with a missing/old notice version: show the current one (400)
   PROVIDER_BUSY = 'PROVIDER_BUSY', // an outside service is rate-limiting us (429)
   PROVIDER_UNAVAILABLE = 'PROVIDER_UNAVAILABLE', // an outside service failed or is off (503)
 }

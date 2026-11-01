@@ -24,7 +24,7 @@ import {
   type User,
 } from '../database/entities/index.js';
 import { GroupAccessService } from '../groups/group-access.service.js';
-import { CLOSED_TRIP_MESSAGE } from '../groups/guards/group-member.guard.js';
+import { tripClosedError } from '../groups/guards/group-member.guard.js';
 import { PushService } from '../notifications/push.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { StorageService } from '../storage/storage.service.js';
@@ -169,7 +169,7 @@ export class ChatService {
     clientMsgId?: string,
   ): Promise<MessageView> {
     const membership = await this.requireMember(groupId, userId);
-    if (membership.group.closedAt) throw new ConflictException(CLOSED_TRIP_MESSAGE);
+    if (membership.group.closedAt) throw tripClosedError();
     if (clientMsgId) {
       const existing = await this.findByClientMsgId(userId, clientMsgId);
       if (existing) return this.existingForResend(existing, groupId, userId);

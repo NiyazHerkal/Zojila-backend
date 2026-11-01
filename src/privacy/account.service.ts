@@ -17,6 +17,8 @@ import {
   GroupRole,
   Invite,
   InviteStatus,
+  LocationHistoryConsent,
+  LocationHistoryPoint,
   LocationShare,
   LocationShareLink,
   Notification,
@@ -57,11 +59,11 @@ export class AccountService {
     private readonly storage: StorageService,
   ) {}
 
-  /** Everything stored about the user, as JSON. Live positions aren't stored, so they're not here. */
+  /** Everything stored about the user, as JSON, including saved location history (live positions aren't stored). */
   async export(userId: string) {
     const user = await this.activeUser(userId);
     const m = this.dataSource.manager;
-    const [memberships, messages, statuses, expensesPaid, expensesRecorded, shares, repayments, invitesSent, invitesReceived, devices, locationShares, feedback, activityUpdates, liveLinks, savedPlaces, arrivals, notifications] =
+    const [memberships, messages, statuses, expensesPaid, expensesRecorded, shares, repayments, invitesSent, invitesReceived, devices, locationShares, feedback, activityUpdates, liveLinks, savedPlaces, arrivals, notifications, historyPoints, historyConsents] =
       await Promise.all([
         m.find(GroupMember, { where: { userId }, relations: { group: true }, order: { joinedAt: 'ASC' } }),
         m.find(Message, { where: { senderId: userId }, order: { createdAt: 'ASC' } }),
@@ -80,6 +82,8 @@ export class AccountService {
         m.find(SavedPlace, { where: { userId }, order: { createdAt: 'ASC' } }),
         m.find(ActivityAttendance, { where: { userId }, order: { arrivedAt: 'ASC' } }),
         m.find(Notification, { where: { userId }, order: { createdAt: 'ASC' } }),
+        m.find(LocationHistoryPoint, { where: { userId }, order: { recordedAt: 'ASC' } }),
+        m.find(LocationHistoryConsent, { where: { userId }, order: { createdAt: 'ASC' } }),
       ]);
 
     return {
@@ -96,7 +100,13 @@ export class AccountService {
         createdAt: user.createdAt,
         lastSeenAt: user.lastSeenAt,
       },
-      groups: memberships.map((g) => ({ groupId: g.groupId, name: g.group.name, role: g.role, joinedAt: g.joinedAt })),
+      groups: memberships.map((g) => ({
+        groupId: g.groupId,
+        name: g.group.name,
+        role: g.role,
+        joinedAt: g.joinedAt,
+        locationHistoryEnabled: g.locationHistoryEnabled,
+      })),
       messages: messages.map((x) => ({
         id: x.id,
         groupId: x.groupId,
@@ -151,6 +161,21 @@ export class AccountService {
       invitesReceived: invitesReceived.map((i) => ({ groupId: i.groupId, channel: i.channel, status: i.status, createdAt: i.createdAt })),
       devices: devices.map((d) => ({ platform: d.platform, registeredAt: d.createdAt })),
       locationSharing: locationShares.map((s) => ({ groupId: s.groupId, duration: s.duration, startedAt: s.startedAt, expiresAt: s.expiresAt })),
+      locationHistory: historyPoints.map((p) => ({
+        groupId: p.groupId,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: p.accuracy,
+        heading: p.heading,
+        speed: p.speed,
+        recordedAt: p.recordedAt,
+      })),
+      locationHistoryConsents: historyConsents.map((c) => ({
+        groupId: c.groupId,
+        action: c.action,
+        noticeVersion: c.noticeVersion,
+        at: c.createdAt,
+      })),
       liveLocationLinks: liveLinks.map((l) => ({
         recipientLabel: l.recipientLabel,
         duration: l.duration,
@@ -173,7 +198,7 @@ export class AccountService {
       activityArrivals: arrivals.map((a) => ({ groupId: a.groupId, activityId: a.stopKey, arrivedAt: a.arrivedAt })),
       notifications: notifications.map((n) => ({ type: n.type, groupId: n.groupId, title: n.title, body: n.body, createdAt: n.createdAt, readAt: n.readAt })),
       notes: [
-        'Live location positions are never stored: only your latest position is kept while you share, and removed when sharing ends.',
+        'Live location: only your latest position is kept while you share, and removed when sharing ends. Positions are saved only in trips where you turned location history on (locationHistory), and each is deleted after the retention period.',
         'Receipt files are attached to the expenses they belong to; download them from the expense in the app.',
       ],
     };
@@ -211,11 +236,12 @@ export class AccountService {
           promoted.push({ groupId: membership.groupId, userId: rest[0].userId });
         }
         const wasSharing = await manager.existsBy(LocationShare, { groupId: membership.groupId, userId });
-        await manager.delete(GroupMember, { groupId: membership.groupId, userId }); // ends location sharing too
+        await manager.delete(GroupMember, { groupId: membership.groupId, userId }); // ends location sharing and deletes saved history too
         leftGroups.push({ groupId: membership.groupId, wasSharing });
       }
 
       await manager.delete(DeviceToken, { userId });
+      await manager.delete(LocationHistoryConsent, { userId });
       await manager.delete(LocationShareLink, { userId });
       await manager.delete(SavedPlace, { userId });
       await manager.delete(ActivityAttendance, { userId });

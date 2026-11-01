@@ -20,6 +20,7 @@ import { REDIS, redisOptions } from '../redis/redis.module.js';
 import { StatusService } from '../status/status.service.js';
 import type { LocationPointDto } from './dto/location.dto.js';
 import { LiveShareService } from './live-share.service.js';
+import { LocationHistoryService } from './location-history.service.js';
 import { ErrorCode, withCode } from '../errors/error-codes.js';
 
 export const LOCATION_QUEUE = 'location-sharing';
@@ -60,7 +61,8 @@ export interface LivePosition {
 /**
  * Live location (PDF §2.4). A member turns sharing on per group for 1h / 4h / 8h / Always.
  * While on, the app sends positions (every ~10 s); each new one is stored as their latest
- * position in Redis (live only, no history) and pushed to the group as `location:updated`.
+ * position in Redis and pushed to the group as `location:updated`. Members who opted in to
+ * location history for the group also get the points saved as a trail (LocationHistoryService).
  *
  * Expiry: a delayed BullMQ job fires at `expiresAt`, deletes the session, tells the group and
  * notifies the sharer (socket + push). A sweep every minute catches anything a job missed.
@@ -84,6 +86,7 @@ export class LocationService implements OnModuleInit, OnApplicationShutdown {
     private readonly config: ConfigService,
     private readonly usage: UsageService,
     private readonly liveShare: LiveShareService,
+    private readonly history: LocationHistoryService,
   ) {}
 
   onModuleInit(): void {
@@ -127,7 +130,8 @@ export class LocationService implements OnModuleInit, OnApplicationShutdown {
   }
 
   async mySession(groupId: string, userId: string) {
-    return this.sessionView(await this.activeShare(groupId, userId));
+    const [share, historyEnabled] = await Promise.all([this.activeShare(groupId, userId), this.history.isEnabled(groupId, userId)]);
+    return { ...this.sessionView(share), historyEnabled };
   }
 
   /** Turn sharing on, or change the duration (the timer restarts from now). */
@@ -178,7 +182,10 @@ export class LocationService implements OnModuleInit, OnApplicationShutdown {
     return this.sessionView(null);
   }
 
-  /** Positions from the app (1 point in the foreground, or a background batch). Only the newest is kept and broadcast. */
+  /**
+   * Positions from the app (1 point in the foreground, or a background batch). Only the newest is
+   * kept live and broadcast; with location history on, the batch is also saved as a trail.
+   */
   async recordPositions(groupId: string, userId: string, points: LocationPointDto[]) {
     const share = await this.activeShare(groupId, userId);
     if (!share) throw new ConflictException('Location sharing is off. Start sharing first.');
@@ -189,7 +196,8 @@ export class LocationService implements OnModuleInit, OnApplicationShutdown {
       .map((p) => ({ ...p, at: Math.min(p.recordedAt ? new Date(p.recordedAt).getTime() : now, now) }))
       .filter((p) => p.at >= share.startedAt.getTime() - 5_000) // never publish fixes from before sharing began
       .filter((p) => !p.recordedAt || new Date(p.recordedAt).getTime() <= now + FUTURE_SLACK_MS);
-    if (!valid.length) return { accepted: 0, latest: null };
+    if (!valid.length) return { accepted: 0, latest: null, savedToHistory: 0 };
+    const savedToHistory = await this.history.record(groupId, userId, valid);
 
     const newest = valid.reduce((a, b) => (b.at > a.at ? b : a));
     const position: LivePosition = {
@@ -204,11 +212,11 @@ export class LocationService implements OnModuleInit, OnApplicationShutdown {
     const stored = await this.redisCall(() => this.redis.hget(positionsKey(groupId), userId));
     const previous = stored ? (JSON.parse(stored) as LivePosition) : null;
     if (previous && previous.recordedAt >= position.recordedAt) {
-      return { accepted: valid.length, latest: previous }; // late batch: nothing newer
+      return { accepted: valid.length, latest: previous, savedToHistory }; // late batch: nothing newer live
     }
     await this.redisCall(() => this.redis.hset(positionsKey(groupId), userId, JSON.stringify(position)));
     await this.realtime.emitToGroup(groupId, LocationEvents.UPDATED, { groupId, userId, ...position });
-    return { accepted: valid.length, latest: position };
+    return { accepted: valid.length, latest: position, savedToHistory };
   }
 
   /**
@@ -234,17 +242,23 @@ export class LocationService implements OnModuleInit, OnApplicationShutdown {
     const sharing = await this.activeShares(userId);
     return {
       updateIntervalSeconds: this.updateIntervalSeconds,
-      groups: sharing.map((s) => ({ groupId: s.groupId, groupName: s.member.group.name, ...this.sharingInfo(s) })),
+      groups: sharing.map((s) => ({
+        groupId: s.groupId,
+        groupName: s.member.group.name,
+        historyEnabled: s.member.locationHistoryEnabled,
+        ...this.sharingInfo(s),
+      })),
     };
   }
 
-  /** The group map: every member, their trip status, whether they're sharing, and their live position. */
+  /** The group map: every member, their trip status, whether they're sharing (and saving history), and their live position. */
   async feed(groupId: string) {
     this.assertRedis();
-    const [members, shares, positions] = await Promise.all([
+    const [members, shares, positions, savingHistory] = await Promise.all([
       this.status.current(groupId),
       this.shares.find({ where: { groupId } }),
       this.redisCall(() => this.redis.hgetall(positionsKey(groupId))),
+      this.history.enabledUserIds(groupId),
     ]);
 
     const now = Date.now();
@@ -264,6 +278,7 @@ export class LocationService implements OnModuleInit, OnApplicationShutdown {
           role: m.role,
           tripStatus: m.status,
           sharing: share ? this.sharingInfo(share) : null,
+          historyEnabled: savingHistory.has(m.userId),
           location: share && positions[m.userId] ? (JSON.parse(positions[m.userId]) as LivePosition) : null,
         };
       }),

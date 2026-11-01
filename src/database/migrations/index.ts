@@ -12,6 +12,7 @@ import { AttendanceAndSavedPlaces1791202000000 } from './1791202000000-Attendanc
 import { Notifications1791203000000 } from './1791203000000-Notifications.js';
 import { InviteCodes1791204000000 } from './1791204000000-InviteCodes.js';
 import { ChatRepliesNotesPlaces1791205000000 } from './1791205000000-ChatRepliesNotesPlaces.js';
+import { LocationHistory1791206000000 } from './1791206000000-LocationHistory.js';
 
 /**
  * Every migration, in order. Listed explicitly (not a file glob) so it works the same in
@@ -33,4 +34,5 @@ export const migrations: Function[] = [
   Notifications1791203000000,
   InviteCodes1791204000000,
   ChatRepliesNotesPlaces1791205000000,
+  LocationHistory1791206000000,
 ];

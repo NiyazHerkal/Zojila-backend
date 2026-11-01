@@ -224,7 +224,9 @@ export class ItineraryService {
         return created;
       });
     } catch (err) {
-      if (isUniqueViolation(err)) throw new ConflictException('This group already has a draft itinerary');
+      if (isUniqueViolation(err)) {
+        throw withCode(new ConflictException('This group already has a draft itinerary'), ErrorCode.DRAFT_EXISTS);
+      }
       throw err;
     }
     return this.view(draft);

@@ -6,7 +6,8 @@ import { Itinerary } from './itinerary.entity.js';
 import { Waypoint } from './waypoint.entity.js';
 import { WaypointDetail } from './waypoint-detail.entity.js';
 import { LocationShare } from './location-share.entity.js';
-import { LocationPing } from './location-ping.entity.js';
+import { LocationHistoryPoint } from './location-history-point.entity.js';
+import { LocationHistoryConsent } from './location-history-consent.entity.js';
 import { Message } from './message.entity.js';
 import { MessageAck } from './message-ack.entity.js';
 import { MessageRead } from './message-read.entity.js';
@@ -34,7 +35,8 @@ export const entities = [
   Waypoint,
   WaypointDetail,
   LocationShare,
-  LocationPing,
+  LocationHistoryPoint,
+  LocationHistoryConsent,
   Message,
   MessageAck,
   MessageRead,
@@ -63,7 +65,8 @@ export { Itinerary } from './itinerary.entity.js';
 export { Waypoint } from './waypoint.entity.js';
 export { WaypointDetail } from './waypoint-detail.entity.js';
 export { LocationShare } from './location-share.entity.js';
-export { LocationPing } from './location-ping.entity.js';
+export { LocationHistoryPoint } from './location-history-point.entity.js';
+export { LocationHistoryConsent, LocationHistoryConsentAction } from './location-history-consent.entity.js';
 export { Message, type AlertLocation } from './message.entity.js';
 export { MessageAck } from './message-ack.entity.js';
 export { MessageRead } from './message-read.entity.js';

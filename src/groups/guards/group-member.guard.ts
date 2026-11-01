@@ -10,6 +10,7 @@ import { Reflector } from '@nestjs/core';
 import { isUUID } from 'class-validator';
 import type { GroupMember, GroupRole } from '../../database/entities/index.js';
 import type { JwtPayload } from '../../auth/strategies/jwt.strategy.js';
+import { ErrorCode, withCode } from '../../errors/error-codes.js';
 import { GroupAccessService } from '../group-access.service.js';
 
 /** Restricts a group-scoped route to the listed roles. Without it, any member passes. */
@@ -18,7 +19,13 @@ export const GroupRoles = Reflector.createDecorator<GroupRole[]>();
 /** Lets a write route run on a closed trip (reopen, delete, leave). Reads always work. */
 export const AllowWhenClosed = Reflector.createDecorator<boolean>({ transform: () => true });
 
-export const CLOSED_TRIP_MESSAGE = "This trip is closed, so it's read-only. An admin can reopen it.";
+/** The 409 for any write on a closed trip, with its own code so apps needn't match the message. */
+export function tripClosedError(): ConflictException {
+  return withCode(
+    new ConflictException("This trip is closed, so it's read-only. An admin can reopen it."),
+    ErrorCode.TRIP_CLOSED,
+  );
+}
 
 export interface GroupScopedRequest {
   method: string;
@@ -58,7 +65,7 @@ export class GroupMemberGuard implements CanActivate {
 
     const allowWhenClosed = this.reflector.getAllAndOverride(AllowWhenClosed, [ctx.getHandler(), ctx.getClass()]);
     if (membership.group.closedAt && request.method !== 'GET' && !allowWhenClosed) {
-      throw new ConflictException(CLOSED_TRIP_MESSAGE);
+      throw tripClosedError();
     }
 
     request.groupMembership = membership;

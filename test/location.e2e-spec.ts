@@ -165,7 +165,7 @@ describe('Live location (e2e)', () => {
 
     it('starts with nobody sharing, a 10 s interval, and members-only access', async () => {
       const mine = await http().get(url('/share')).set(as(bob)).expect(200);
-      expect(mine.body).toEqual({ sharing: false, updateIntervalSeconds: 10 });
+      expect(mine.body).toEqual({ sharing: false, updateIntervalSeconds: 10, historyEnabled: false });
 
       const feed = await http().get(url()).set(as(alice)).expect(200);
       expect(feed.body.updateIntervalSeconds).toBe(10);

@@ -363,11 +363,57 @@ describe('Expenses (e2e)', () => {
       .set(as(carol))
       .send({ amount: 300, category: 'TRANSPORT', date: '2026-10-13', splitType: 'EQUAL' })
       .expect(201);
+    const custom = await http()
+      .post(url())
+      .set(as(alice))
+      .send({
+        amount: 90,
+        category: 'FOOD',
+        date: '2026-10-13',
+        splitType: 'CUSTOM',
+        shares: [
+          { userId: alice.id, amount: 60 },
+          { userId: carol.id, amount: 30 },
+        ],
+      })
+      .expect(201);
+    const bobsOnly = await http()
+      .post(url())
+      .set(as(alice))
+      .send({ amount: 40, category: 'FOOD', date: '2026-10-13', splitType: 'CUSTOM', shares: [{ userId: bob.id, amount: 40 }] })
+      .expect(201);
     await http().delete(`/groups/${groupId}/members/${carol.id}`).set(as(carol)).expect(200);
     const { body } = await http().get(url('/summary')).set(as(alice)).expect(200);
     const exMember = body.members.find((m: { userId: string }) => m.userId === carol.id);
-    expect(exMember).toMatchObject({ isMember: false, balance: 200 });
-    expect(body.settleUp.reduce((s: number, t: { amount: number }) => s + t.amount, 0)).toBe(200);
+    expect(exMember).toMatchObject({ isMember: false, balance: 170 }); // +200 from her fare, -30 for her share
+    expect(body.settleUp.reduce((s: number, t: { amount: number }) => s + t.amount, 0)).toBe(170);
+
+    // A CUSTOM split she was already on keeps her when its amount changes; a new one can't add her.
+    const edited = await http()
+      .patch(url(`/${custom.body.id}`))
+      .set(as(alice))
+      .send({
+        amount: 100,
+        shares: [
+          { userId: alice.id, amount: 60 },
+          { userId: carol.id, amount: 40 },
+        ],
+      })
+      .expect(200);
+    expect(edited.body.splits).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: carol.id, amount: 40 })]),
+    );
+    const added = await http()
+      .patch(url(`/${bobsOnly.body.id}`))
+      .set(as(alice))
+      .send({
+        shares: [
+          { userId: bob.id, amount: 20 },
+          { userId: carol.id, amount: 20 },
+        ],
+      })
+      .expect(400);
+    expect(added.body.message).toBe('Everyone in shares must be a member of the group');
   });
 
   it('deletes expenses, and the group’s receipt files with the group', async () => {

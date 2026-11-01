@@ -2,8 +2,9 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, LessThan, Repository } from 'typeorm';
-import { Feedback, Group, Invite, LocationShareLink, Notification, UsageDaily, User } from '../database/entities/index.js';
+import { Feedback, Group, Invite, LocationHistoryPoint, LocationShareLink, Notification, UsageDaily, User } from '../database/entities/index.js';
 import { GroupsService } from '../groups/groups.service.js';
+import { locationHistoryRetentionDays } from '../location/location-history.service.js';
 import { NOTIFICATION_RETENTION_DAYS } from '../notifications/notification-feed.service.js';
 import { reportError } from '../security/sentry.js';
 import { StorageService } from '../storage/storage.service.js';
@@ -21,6 +22,7 @@ export interface RetentionResult {
   oldFeedbackDeleted: number;
   oldLiveLinksDeleted: number;
   oldNotificationsDeleted: number;
+  oldLocationHistoryDeleted: number;
 }
 
 /**
@@ -33,7 +35,8 @@ export interface RetentionResult {
  *     FEEDBACK_RETENTION_DAYS (365) are deleted.
  *   - Live location links (people outside the app) are deleted 30 days after they ended.
  *   - Notifications feed entries are deleted after NOTIFICATION_RETENTION_DAYS (90).
- * Location history needs no job: only the latest position is kept, and only while sharing.
+ *   - Saved location history (opt-in trails) older than LOCATION_HISTORY_RETENTION_DAYS (30).
+ *     Reads never return older points either, so nothing past the period is shown even between runs.
  * Set RETENTION_JOB_DISABLED=true to turn the timer off (tests).
  */
 @Injectable()
@@ -43,6 +46,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
   private readonly inviteDays: number;
   private readonly usageDays: number;
   private readonly feedbackDays: number;
+  private readonly locationHistoryDays: number;
   private readonly enabled: boolean;
   private timers: NodeJS.Timeout[] = [];
 
@@ -55,6 +59,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(Feedback) private readonly feedback: Repository<Feedback>,
     @InjectRepository(LocationShareLink) private readonly liveLinks: Repository<LocationShareLink>,
     @InjectRepository(Notification) private readonly notifications: Repository<Notification>,
+    @InjectRepository(LocationHistoryPoint) private readonly locationHistory: Repository<LocationHistoryPoint>,
     private readonly groups: GroupsService,
     private readonly storage: StorageService,
   ) {
@@ -62,6 +67,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
     this.inviteDays = positive(config.get<string>('INVITE_RETENTION_DAYS'), 30);
     this.usageDays = positive(config.get<string>('USAGE_RETENTION_DAYS'), 180);
     this.feedbackDays = positive(config.get<string>('FEEDBACK_RETENTION_DAYS'), 365);
+    this.locationHistoryDays = locationHistoryRetentionDays(config);
     this.enabled = config.get<string>('RETENTION_JOB_DISABLED') !== 'true';
   }
 
@@ -88,11 +94,19 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
       oldFeedbackDeleted: await this.purgeOldFeedback(now),
       oldLiveLinksDeleted: await this.purgeOldLiveLinks(now),
       oldNotificationsDeleted: await this.purgeOldNotifications(now),
+      oldLocationHistoryDeleted: await this.purgeOldLocationHistory(now),
     };
     if (Object.values(result).some(Boolean)) {
       this.logger.log(`Retention: ${JSON.stringify(result)}`);
     }
     return result;
+  }
+
+  /** Saved location history points recorded more than LOCATION_HISTORY_RETENTION_DAYS ago. */
+  async purgeOldLocationHistory(now: Date, onlyUserIds?: string[]): Promise<number> {
+    const cutoff = new Date(now.getTime() - this.locationHistoryDays * DAY_MS);
+    const res = await this.locationHistory.delete({ recordedAt: LessThan(cutoff), ...(onlyUserIds && { userId: In(onlyUserIds) }) });
+    return res.affected ?? 0;
   }
 
   /** Notifications feed entries older than NOTIFICATION_RETENTION_DAYS. */

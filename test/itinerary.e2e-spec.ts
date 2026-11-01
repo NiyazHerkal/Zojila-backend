@@ -167,7 +167,8 @@ describe('Itinerary (e2e)', () => {
       basedOnVersion: null,
       waypoints: [],
     });
-    await http().post(`${base()}/draft`).set(as(alice)).expect(409);
+    const again = await http().post(`${base()}/draft`).set(as(alice)).expect(409);
+    expect(again.body.code).toBe('DRAFT_EXISTS');
   });
 
   it('drops pins with enrichment, and derives start/mid/end from the order', async () => {

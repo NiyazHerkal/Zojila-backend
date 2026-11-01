@@ -1,10 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import type { JwtPayload } from '../auth/strategies/jwt.strategy.js';
-import { GroupMemberGuard } from '../groups/guards/group-member.guard.js';
-import { LocationUpdateDto, StartSharingDto } from './dto/location.dto.js';
+import { CurrentMembership } from '../groups/decorators/current-membership.decorator.js';
+import { AllowWhenClosed, GroupMemberGuard } from '../groups/guards/group-member.guard.js';
+import type { GroupMember } from '../database/entities/index.js';
+import { LocationHistoryQueryDto, LocationUpdateDto, StartSharingDto, UpdateLocationHistoryDto } from './dto/location.dto.js';
+import { LocationHistoryService } from './location-history.service.js';
 import { LocationService } from './location.service.js';
 
 /** Live location per group (PDF §2.4). Every member controls only their own sharing. */
@@ -13,7 +16,10 @@ import { LocationService } from './location.service.js';
 @UseGuards(JwtAuthGuard, GroupMemberGuard)
 @Controller('groups/:groupId/location')
 export class LocationController {
-  constructor(private readonly locationService: LocationService) {}
+  constructor(
+    private readonly locationService: LocationService,
+    private readonly history: LocationHistoryService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'Group map feed: every member with trip status, sharing state and live position.' })
@@ -45,5 +51,40 @@ export class LocationController {
   @ApiOperation({ summary: 'Stop sharing now.' })
   stop(@Param('groupId') groupId: string, @CurrentUser() user: JwtPayload) {
     return this.locationService.stopSharing(groupId, user.sub);
+  }
+
+  // --- location history (opt-in per group) ---
+
+  @Get('history/settings')
+  @ApiOperation({ summary: 'My location history setting in this group, with the notice to show before opting in.' })
+  historySettings(@CurrentMembership() membership: GroupMember) {
+    return this.history.settings(membership);
+  }
+
+  @Put('history/settings')
+  @AllowWhenClosed() // turning it off must always work; turning it on is refused on a closed trip
+  @ApiOperation({
+    summary: 'Turn my location history on (send the notice version shown) or off (stops saving and deletes my trail here).',
+  })
+  updateHistorySettings(@CurrentMembership() membership: GroupMember, @Body() dto: UpdateLocationHistoryDto) {
+    return this.history.update(membership, dto.enabled, dto.noticeVersion);
+  }
+
+  @Delete('history')
+  @AllowWhenClosed()
+  @ApiOperation({ summary: 'Delete my saved trail in this group (the setting stays as it is).' })
+  deleteMyHistory(@Param('groupId') groupId: string, @CurrentUser() user: JwtPayload) {
+    return this.history.deleteMine(groupId, user.sub);
+  }
+
+  @Get('history/:userId')
+  @ApiOperation({ summary: "A member's saved trail, oldest first (others' only while their history is on). Paged by `after`." })
+  memberHistory(
+    @Param('groupId') groupId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query() query: LocationHistoryQueryDto,
+  ) {
+    return this.history.history(groupId, user.sub, userId, query);
   }
 }

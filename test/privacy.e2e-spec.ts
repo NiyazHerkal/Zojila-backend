@@ -131,10 +131,12 @@ describe('Data privacy (e2e)', () => {
         .set(as(bob))
         .send({ amount: 10, category: 'FOOD', date: '2026-10-12', splitType: 'EQUAL' })
         .expect(409);
+      expect(blocked.body).toMatchObject({ code: 'TRIP_CLOSED' });
       expect(blocked.body.message).toMatch(/closed, so it's read-only/);
       await http().post(`/groups/${tripId}/status`).set(as(bob)).send({ status: 'ARRIVED' }).expect(409);
       await http().patch(`/groups/${tripId}`).set(as(alice)).send({ name: 'x' }).expect(409);
-      await http().post(`/invites/${invite.body.id}/accept`).set(as(carol)).expect(409);
+      const accept = await http().post(`/invites/${invite.body.id}/accept`).set(as(carol)).expect(409);
+      expect(accept.body.code).toBe('TRIP_CLOSED');
       // Reading (and downloading the report) still works.
       await http().get(`/groups/${tripId}/expenses`).set(as(bob)).expect(200);
       await http().get(`/groups/${tripId}/expenses/report?format=csv`).set(as(bob)).expect(200);

@@ -10,7 +10,6 @@ import { OtpPurpose } from './enums.js';
 import { Group } from './group.entity.js';
 import { GroupMember } from './group-member.entity.js';
 import { Itinerary } from './itinerary.entity.js';
-import { LocationPing } from './location-ping.entity.js';
 import { Message } from './message.entity.js';
 import { StatusUpdate } from './status-update.entity.js';
 import { Expense } from './expense.entity.js';
@@ -103,8 +102,6 @@ export class User {
   @OneToMany(() => Itinerary, (itinerary) => itinerary.creator)
   createdItineraries!: Relation<Itinerary>[];
 
-  @OneToMany(() => LocationPing, (ping) => ping.user)
-  locationPings!: Relation<LocationPing>[];
 
   @OneToMany(() => Message, (message) => message.sender)
   messages!: Relation<Message>[];

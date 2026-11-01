@@ -3,9 +3,11 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
+  IsBoolean,
   IsArray,
   IsDateString,
   IsEnum,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -15,6 +17,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { LiveShareDuration, ShareDuration } from '../../database/entities/index.js';
+import { MAX_HISTORY_LIMIT } from '../location-history.service.js';
 
 export class StartSharingDto {
   @ApiProperty({ enum: ShareDuration, description: 'ONE_HOUR / FOUR_HOURS / EIGHT_HOURS, or ALWAYS (until turned off)' })
@@ -81,4 +84,42 @@ export class LocationUpdateDto {
   @ValidateNested({ each: true })
   @Type(() => LocationPointDto)
   points!: LocationPointDto[];
+}
+
+export class UpdateLocationHistoryDto {
+  @ApiProperty({ example: true, description: 'true = save my shared positions as a trail in this group; false = stop and delete it' })
+  @IsBoolean()
+  enabled!: boolean;
+
+  @ApiPropertyOptional({ example: '2026-10-28', description: 'Version of the notice shown to the user. Required when `enabled` is true.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  noticeVersion?: string;
+}
+
+export class LocationHistoryQueryDto {
+  @ApiPropertyOptional({ example: '2026-10-27T00:00:00.000Z', description: 'Start (default and earliest: the retention period ago)' })
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-28T00:00:00.000Z', description: 'End (default: now)' })
+  @IsOptional()
+  @IsDateString()
+  to?: string;
+
+  @ApiPropertyOptional({ description: '`nextCursor` from the previous page' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  after?: string;
+
+  @ApiPropertyOptional({ example: 1000, minimum: 1, maximum: MAX_HISTORY_LIMIT, description: 'Points per page (default 1000)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(MAX_HISTORY_LIMIT)
+  limit?: number;
 }

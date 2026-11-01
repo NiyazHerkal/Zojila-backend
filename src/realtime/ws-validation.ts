@@ -1,13 +1,14 @@
 import { HttpException } from '@nestjs/common';
 import { plainToInstance, type ClassConstructor } from 'class-transformer';
 import { validate } from 'class-validator';
+import { codeOf, defaultCode, ErrorCode } from '../errors/error-codes.js';
 
 /**
  * What every inbound socket event answers through its acknowledgement callback:
  * `socket.emit('chat:send', payload, (res) => …)` → `{ ok: true, data }` or
- * `{ ok: false, error: { status, message } }` (status uses the HTTP codes the REST API uses).
+ * `{ ok: false, error: { status, message, code } }` (status and code are the ones the REST API uses).
  */
-export type WsAck<T> = { ok: true; data: T } | { ok: false; error: { status: number; message: string } };
+export type WsAck<T> = { ok: true; data: T } | { ok: false; error: { status: number; message: string; code: string } };
 
 class WsValidationError extends Error {}
 
@@ -37,16 +38,17 @@ export async function wsAck<T>(fn: () => Promise<T>, onUnexpected: (err: Error) 
   try {
     return { ok: true, data: await fn() };
   } catch (err) {
-    if (err instanceof WsValidationError) return { ok: false, error: { status: 400, message: err.message } };
+    if (err instanceof WsValidationError) return { ok: false, error: { status: 400, message: err.message, code: ErrorCode.VALIDATION_FAILED } };
     if (err instanceof HttpException) {
       const res = err.getResponse();
       const message =
         typeof res === 'object' && res && 'message' in res
           ? ([] as string[]).concat((res as { message: string | string[] }).message).join('; ')
           : err.message;
-      return { ok: false, error: { status: err.getStatus(), message } };
+      const status = err.getStatus();
+      return { ok: false, error: { status, message, code: codeOf(err) ?? defaultCode(status) } };
     }
     onUnexpected(err as Error);
-    return { ok: false, error: { status: 500, message: 'Something went wrong' } };
+    return { ok: false, error: { status: 500, message: 'Something went wrong', code: defaultCode(500) } };
   }
 }

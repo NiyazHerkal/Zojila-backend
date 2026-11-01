@@ -18,7 +18,7 @@ import {
   InviteStatus,
   User,
 } from '../database/entities/index.js';
-import { CLOSED_TRIP_MESSAGE } from './guards/group-member.guard.js';
+import { tripClosedError } from './guards/group-member.guard.js';
 import { InviteDeliveryService } from '../notifications/invite-delivery.service.js';
 import { NotificationFeedService, TRIP_FEED_TYPES } from '../notifications/notification-feed.service.js';
 import { GroupEventsService } from './group-events.service.js';
@@ -232,7 +232,7 @@ export class InvitesService {
   // Returns whether the user actually joined (false = was already a member).
   private async joinAsViewer(manager: EntityManager, groupId: string, userId: string): Promise<boolean> {
     const group = await manager.findOne(Group, { where: { id: groupId }, select: { id: true, closedAt: true } });
-    if (group?.closedAt) throw new ConflictException(CLOSED_TRIP_MESSAGE);
+    if (group?.closedAt) throw tripClosedError();
     const result = await manager
       .createQueryBuilder()
       .insert()

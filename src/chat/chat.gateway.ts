@@ -13,7 +13,7 @@ import { MarkReadWsDto, SendMessageDto, TypingDto } from './dto/chat.dto.js';
  * RealtimeGateway, so `socket.data.userId` is always the authenticated user.
  *
  * Every event answers through the socket.io acknowledgement callback with
- * `{ ok: true, data }` or `{ ok: false, error: { status, message } }`:
+ * `{ ok: true, data }` or `{ ok: false, error: { status, message, code } }`:
  *
  *   socket.emit('chat:send', { groupId, body, clientMsgId }, (res) => …)
  *

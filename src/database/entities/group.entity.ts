@@ -12,7 +12,6 @@ import { User } from './user.entity.js';
 import { GroupMember } from './group-member.entity.js';
 import { Invite } from './invite.entity.js';
 import { Itinerary } from './itinerary.entity.js';
-import { LocationPing } from './location-ping.entity.js';
 import { Message } from './message.entity.js';
 import { StatusUpdate } from './status-update.entity.js';
 import { Expense } from './expense.entity.js';
@@ -73,8 +72,6 @@ export class Group {
   @OneToMany(() => Itinerary, (itinerary) => itinerary.group)
   itineraries!: Relation<Itinerary>[];
 
-  @OneToMany(() => LocationPing, (ping) => ping.group)
-  locationPings!: Relation<LocationPing>[];
 
   @OneToMany(() => Message, (message) => message.group)
   messages!: Relation<Message>[];

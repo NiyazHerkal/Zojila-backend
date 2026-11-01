@@ -25,6 +25,14 @@ export class GroupMember {
   @CreateDateColumn({ name: 'joined_at', type: 'timestamptz' })
   joinedAt!: Date;
 
+  /** Opt-in, per group: save this member's shared positions as a trail (location history). */
+  @Column({ name: 'location_history_enabled', default: false })
+  locationHistoryEnabled!: boolean;
+
+  /** When they last turned history on; positions taken before this are never saved. */
+  @Column({ name: 'location_history_enabled_at', type: 'timestamptz', precision: 3, nullable: true })
+  locationHistoryEnabledAt!: Date | null;
+
   @ManyToOne(() => Group, (group) => group.members, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'group_id' })
   group!: Relation<Group>;
