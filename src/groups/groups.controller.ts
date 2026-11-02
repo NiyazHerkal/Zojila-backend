@@ -5,6 +5,7 @@ import {
   Get,
   Header,
   HttpCode,
+  Logger,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -40,6 +41,8 @@ const ADMIN = [GroupRole.ADMIN];
 @UseGuards(JwtAuthGuard)
 @Controller('groups')
 export class GroupsController {
+  private readonly logger = new Logger(GroupsController.name);
+
   constructor(
     private readonly groupsService: GroupsService,
     private readonly invitesService: InvitesService,
@@ -53,8 +56,10 @@ export class GroupsController {
 
   @Get()
   @ApiOperation({ summary: "List the current user's groups, with their role in each." })
-  listMine(@CurrentUser() user: JwtPayload) {
-    return this.groupsService.listMine(user.sub);
+  async listMine(@CurrentUser() user: JwtPayload) {
+    const groups = await this.groupsService.listMine(user.sub);
+    this.logger.log(`Listed groups for userId=${user.sub}: count=${groups.length}`);
+    return groups;
   }
 
   @Get(':groupId')

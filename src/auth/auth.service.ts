@@ -4,6 +4,7 @@ import {
   ConflictException,
   HttpException,
   HttpStatus,
+  Logger,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -46,6 +47,8 @@ interface TokenPair {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly jwt: JwtService,
@@ -55,12 +58,14 @@ export class AuthService {
   ) {}
 
   async signup(dto: SignupDto) {
-    if (!dto.email && !dto.phone) {
+    const email = dto.email?.trim().toLowerCase() || null;
+    const phone = dto.phone?.trim() || null;
+    if (!email && !phone) {
       throw new BadRequestException('email or phone is required');
     }
 
     const existing = await this.users.findOne({
-      where: this.identifierWhere(dto.email, dto.phone),
+      where: this.identifierWhere(email ?? undefined, phone ?? undefined),
     });
     if (existing) {
       throw withCode(new ConflictException('An account with this email/phone already exists'), ErrorCode.ACCOUNT_EXISTS);
@@ -72,8 +77,8 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
     const user = await this.saveUnique(
       this.users.create({
-        email: dto.email,
-        phone: dto.phone,
+        email,
+        phone,
         username: dto.username,
         passwordHash,
         name: dto.name,
@@ -82,8 +87,8 @@ export class AuthService {
     );
 
     const code = await this.issueOtp(user.id, OtpPurpose.SIGNUP_VERIFICATION);
-    if (dto.email) await this.otpDelivery.sendEmail(dto.email, code);
-    if (dto.phone) await this.otpDelivery.sendSms(dto.phone, code);
+    if (email) await this.otpDelivery.sendEmail(email, code);
+    if (phone) await this.otpDelivery.sendSms(phone, code);
 
     return { userId: user.id, message: 'Verification code sent' };
   }
@@ -122,6 +127,10 @@ export class AuthService {
   }
 
   async login(dto: LoginDto): Promise<TokenPair> {
+    // Legacy rows can contain empty contact fields; never use those as login identifiers.
+    if (!dto.identifier.trim()) {
+      throw withCode(new UnauthorizedException('Invalid credentials'), ErrorCode.INVALID_CREDENTIALS);
+    }
     const user = await this.users.findOne({
       where: [
         { email: dto.identifier },
@@ -130,13 +139,22 @@ export class AuthService {
       ],
     });
     if (!user || !(await bcrypt.compare(dto.password, user.passwordHash))) {
+      this.logger.warn(`Login rejected for ${this.maskIdentifier(dto.identifier)}: invalid credentials`);
       throw withCode(new UnauthorizedException('Invalid credentials'), ErrorCode.INVALID_CREDENTIALS);
     }
     if (!user.emailVerified && !user.phoneVerified) {
+      this.logger.warn(`Login rejected for ${this.maskIdentifier(dto.identifier)}: account not verified`);
       throw withCode(new UnauthorizedException('Account not verified'), ErrorCode.ACCOUNT_NOT_VERIFIED);
     }
 
+    this.logger.log(`Login accepted for ${this.maskIdentifier(dto.identifier)} (userId=${user.id})`);
     return this.issueTokenPair(user.id, !!dto.rememberMe);
+  }
+
+  private maskIdentifier(identifier: string): string {
+    const at = identifier.indexOf('@');
+    if (at > 0) return `${identifier[0]}***${identifier.slice(at)}`;
+    return `${identifier.slice(0, 1)}***`;
   }
 
   async requestOtpLogin(dto: OtpRequestDto): Promise<{ message: string }> {
@@ -402,14 +420,16 @@ export class AuthService {
 
   private toPublicProfile(user: User): PublicProfile {
     const { id, username, email, phone, name, avatarUrl, emailVerified, phoneVerified, createdAt } = user;
-    return { id, username, email, phone, name, avatarUrl, emailVerified, phoneVerified, createdAt };
+    // Keep optional contacts safe for clients that deserialize profile fields as strings.
+    // Normalize only the response: absent contacts remain NULL in the database.
+    return { id, username, email: email ?? '', phone: phone ?? '', name, avatarUrl, emailVerified, phoneVerified, createdAt };
   }
 }
 
 export type PublicProfile = Pick<
   User,
-  'id' | 'username' | 'email' | 'phone' | 'name' | 'avatarUrl' | 'emailVerified' | 'phoneVerified' | 'createdAt'
->;
+  'id' | 'username' | 'name' | 'avatarUrl' | 'emailVerified' | 'phoneVerified' | 'createdAt'
+> & { email: string; phone: string };
 
 export interface ProfileChange {
   profile: PublicProfile;

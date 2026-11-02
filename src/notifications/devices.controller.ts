@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Injectable, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Injectable, Logger, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -10,16 +10,20 @@ import { RegisterDeviceDto, UnregisterDeviceDto } from './dto/register-device.dt
 
 @Injectable()
 export class DevicesService {
+  private readonly logger = new Logger(DevicesService.name);
+
   constructor(@InjectRepository(DeviceToken) private readonly devices: Repository<DeviceToken>) {}
 
   /** Upsert by token: re-registering refreshes it, and a token seen under another user moves to this one. */
   async register(userId: string, dto: RegisterDeviceDto) {
     await this.devices.upsert({ userId, token: dto.token, platform: dto.platform }, ['token']);
+    this.logger.log(`Registered push device for userId=${userId}, platform=${dto.platform}`);
     return { registered: true };
   }
 
   async unregister(userId: string, token: string): Promise<void> {
-    await this.devices.delete({ userId, token });
+    const result = await this.devices.delete({ userId, token });
+    this.logger.log(`Unregistered push device for userId=${userId}, deleted=${result.affected ?? 0}`);
   }
 }
 

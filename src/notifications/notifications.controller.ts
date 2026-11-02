@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
@@ -37,6 +37,8 @@ export class MarkReadDto {
 @UseGuards(JwtAuthGuard)
 @Controller('notifications')
 export class NotificationsController {
+  private readonly logger = new Logger(NotificationsController.name);
+
   constructor(private readonly feed: NotificationFeedService) {}
 
   @Get()
@@ -48,7 +50,9 @@ export class NotificationsController {
   @Get('unread-count')
   @ApiOperation({ summary: 'Just the unread count, for the badge.' })
   async unread(@CurrentUser() user: JwtPayload) {
-    return { unreadCount: await this.feed.unreadCount(user.sub) };
+    const unreadCount = await this.feed.unreadCount(user.sub);
+    this.logger.log(`Read unread notification count for userId=${user.sub}: count=${unreadCount}`);
+    return { unreadCount };
   }
 
   @Post('read')

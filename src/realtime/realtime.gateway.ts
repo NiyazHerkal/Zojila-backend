@@ -48,7 +48,10 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     this.ref.server = server;
     server.use(async (socket, next) => {
       const token = this.extractToken(socket);
-      if (!token) return next(new Error('Unauthorized'));
+      if (!token) {
+        this.logger.warn(`Socket connection rejected: missing access token (socketId=${socket.id})`);
+        return next(new Error('Unauthorized'));
+      }
       try {
         const payload = await this.jwt.verifyAsync<JwtPayload & { exp: number }>(token, {
           secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET'),
@@ -56,6 +59,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         (socket.data as SocketData) = { userId: payload.sub, exp: payload.exp };
         next();
       } catch {
+        this.logger.warn(`Socket connection rejected: invalid or expired access token (socketId=${socket.id})`);
         next(new Error('Unauthorized'));
       }
     });
@@ -73,7 +77,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     socket.once('disconnect', () => clearTimeout(timer));
 
     socket.emit('ready', { userId });
-    this.logger.debug(`Socket ${socket.id} connected for user ${userId}`);
+    this.logger.log(`Socket connected for userId=${userId} (socketId=${socket.id})`);
     await this.presence
       .userConnected(userId)
       .catch((err: Error) => this.logger.warn(`Presence update for ${userId} failed: ${err.message}`));

@@ -8,14 +8,14 @@ import { IsUsernamePolicy, USERNAME_RULES_DESCRIPTION } from '../decorators/user
 export class SignupDto {
   @ApiPropertyOptional({ example: 'rider@example.com' })
   @EmptyToUndefined()
-  @ValidateIf((dto: SignupDto) => !dto.phone)
+  @ValidateIf((dto: SignupDto) => dto.email != null || !dto.phone)
   @NormalizeEmail()
   @IsEmail()
   email?: string;
 
   @ApiPropertyOptional({ example: '+919876543210' })
   @EmptyToUndefined()
-  @ValidateIf((dto: SignupDto) => !dto.email)
+  @ValidateIf((dto: SignupDto) => dto.phone != null || !dto.email)
   @IsPhoneNumber()
   phone?: string;
 
