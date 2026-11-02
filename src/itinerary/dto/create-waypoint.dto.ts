@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
   IsDateString,
   IsInt,
@@ -18,6 +19,7 @@ export const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
 export class CreateWaypointDto {
   @ApiProperty({ example: 'Manali', description: 'Place name shown on the pin' })
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MinLength(1)
   @MaxLength(200)
   name!: string;

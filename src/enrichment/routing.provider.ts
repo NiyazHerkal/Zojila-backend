@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { fetchWithTimeout } from './http.js';
+import { fetchWithTimeout, HttpResponseError } from './http.js';
 
 export interface RoutePoint {
   lat: number;
@@ -65,8 +65,10 @@ export class OsrmRoutingProvider extends RoutingProvider {
     try {
       res = await fetchWithTimeout(url, ROUTE_TIMEOUT_MS);
     } catch (err) {
-      // OSRM answers "no route" with HTTP 400 + code NoRoute; fetchWithTimeout turns that into an error.
-      if ((err as Error).message.startsWith('HTTP 400')) throw new NoRoadRouteError('No road route between these stops');
+      if (err instanceof HttpResponseError && err.response.status === 400) {
+        const errorBody = await err.response.json().catch(() => null) as { code?: string } | null;
+        if (errorBody?.code === 'NoRoute') throw new NoRoadRouteError('No road route between these stops');
+      }
       throw err;
     }
     const body = (await res.json()) as {
@@ -80,7 +82,7 @@ export class OsrmRoutingProvider extends RoutingProvider {
       }[];
     };
     const route = body.routes?.[0];
-    if (body.code === 'NoRoute' || (body.code === 'Ok' && !route)) throw new NoRoadRouteError(body.message ?? 'No road route');
+    if (body.code === 'NoRoute') throw new NoRoadRouteError(body.message ?? 'No road route');
     if (body.code !== 'Ok' || !route) throw new Error(`OSRM: ${body.code ?? 'no code'} ${body.message ?? ''}`.trim());
     return {
       distanceMeters: route.distance,

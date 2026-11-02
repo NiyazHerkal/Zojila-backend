@@ -105,22 +105,25 @@ export class GroupsService {
   }
 
   async update(groupId: string, membership: GroupMember, dto: UpdateGroupDto): Promise<GroupView> {
-    const group = await this.groups.findOneByOrFail({ id: groupId });
-    if (dto.name !== undefined) group.name = dto.name;
-    if (dto.description !== undefined) group.description = dto.description;
-    if (dto.tripStart !== undefined) group.tripStart = new Date(dto.tripStart);
-    if (dto.tripEnd !== undefined) group.tripEnd = new Date(dto.tripEnd);
-    this.assertTripDates(group.tripStart, group.tripEnd);
-    if (dto.currency !== undefined && dto.currency !== group.currency) {
-      // Amounts are stored without conversion, so the currency is fixed once money is recorded.
-      const hasMoney =
-        (await this.dataSource.getRepository(Expense).existsBy({ groupId })) ||
-        (await this.dataSource.getRepository(ExpenseSettlement).existsBy({ groupId }));
-      if (hasMoney) throw new ConflictException("The currency can't change once the group has expenses");
-      group.currency = dto.currency;
-    }
+    await this.dataSource.transaction(async (manager) => {
+      // Money creation takes the same lock, so currency cannot change across a concurrent insert.
+      const group = await manager.findOneOrFail(Group, { where: { id: groupId }, lock: { mode: 'pessimistic_write' } });
+      if (dto.name !== undefined) group.name = dto.name;
+      if (dto.description !== undefined) group.description = dto.description;
+      if (dto.tripStart !== undefined) group.tripStart = new Date(dto.tripStart);
+      if (dto.tripEnd !== undefined) group.tripEnd = new Date(dto.tripEnd);
+      this.assertTripDates(group.tripStart, group.tripEnd);
+      if (dto.currency !== undefined && dto.currency !== group.currency) {
+        // Amounts are stored without conversion, so the currency is fixed once money is recorded.
+        const hasMoney =
+          (await manager.existsBy(Expense, { groupId })) ||
+          (await manager.existsBy(ExpenseSettlement, { groupId }));
+        if (hasMoney) throw new ConflictException("The currency can't change once the group has expenses");
+        group.currency = dto.currency;
+      }
 
-    await this.groups.save(group);
+      await manager.save(group);
+    });
     return this.changed(groupId, membership);
   }
 
@@ -309,6 +312,9 @@ export class GroupsService {
   }
 
   private assertTripDates(tripStart: Date, tripEnd: Date): void {
+    if (!Number.isFinite(tripStart.getTime()) || !Number.isFinite(tripEnd.getTime())) {
+      throw new BadRequestException('tripStart and tripEnd must be valid dates');
+    }
     if (tripEnd < tripStart) throw new BadRequestException('tripEnd must not be before tripStart');
   }
 

@@ -500,4 +500,16 @@ describe('OsrmRoutingProvider', () => {
     expect(new OsrmRoutingProvider(config({ ROUTING_URL: 'off' })).configured).toBe(false);
     expect(new OsrmRoutingProvider(config({})).configured).toBe(true);
   });
+
+  it.each([
+    [400, '{"code":"InvalidQuery"}'],
+    [400, 'invalid JSON'],
+    [200, '{"code":"Ok","routes":[]}'],
+    [503, '{"code":"NoRoute"}'],
+  ])('does not classify provider error %s %s as no road', async (status, body) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status })));
+    const osrm = new OsrmRoutingProvider(config({}));
+    await expect(osrm.route([{ lat: 1, lng: 1 }, { lat: 2, lng: 2 }]))
+      .rejects.not.toBeInstanceOf(NoRoadRouteError);
+  });
 });

@@ -17,6 +17,7 @@ import {
   LiveShareDuration,
   LiveShareEndReason,
   LocationShareLink,
+  User,
 } from '../database/entities/index.js';
 import { PushService } from '../notifications/push.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
@@ -83,15 +84,22 @@ export class LiveShareService {
   // ---------------------------------------------------------------- the sharer
 
   async start(userId: string, duration: LiveShareDuration, recipientLabel?: string) {
-    const active = await this.activeLinks(userId);
-    if (active.length >= this.maxActive) {
-      throw new ConflictException(`You can share your live location with at most ${this.maxActive} people at a time. Stop one first.`);
-    }
     const token = randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + DURATION_MS[duration]);
-    const link = await this.links.save(
-      this.links.create({ userId, recipientLabel: recipientLabel?.trim() || null, tokenHash: hashToken(token), duration, expiresAt }),
-    );
+    const link = await this.links.manager.transaction(async (manager) => {
+      // A stable per-user row lock works even when the user has no links yet, across API instances.
+      await manager.findOneOrFail(User, { where: { id: userId }, lock: { mode: 'pessimistic_write' } });
+      const now = new Date();
+      const active = await manager.count(LocationShareLink, {
+        where: { userId, endedAt: IsNull(), expiresAt: MoreThan(now) },
+      });
+      if (active >= this.maxActive) {
+        throw new ConflictException(`You can share your live location with at most ${this.maxActive} people at a time. Stop one first.`);
+      }
+      const expiresAt = new Date(now.getTime() + DURATION_MS[duration]);
+      return manager.save(manager.create(LocationShareLink, {
+        userId, recipientLabel: recipientLabel?.trim() || null, tokenHash: hashToken(token), duration, expiresAt,
+      }));
+    });
     const view = this.ownerView(link);
     await this.realtime.emitToUser(userId, LIVE_SHARE_EVENTS.STARTED, view);
     // The raw token is returned this once; only its hash is stored.

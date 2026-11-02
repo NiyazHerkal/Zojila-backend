@@ -152,7 +152,7 @@ export class CreateExpenseDto {
  * expense re-splits it between the same members; a CUSTOM one needs new `shares` too, and one
  * that several people paid needs new `payments`.
  */
-export class UpdateExpenseDto extends PartialType(OmitType(CreateExpenseDto, ['clientId'] as const)) {}
+export class UpdateExpenseDto extends PartialType(OmitType(CreateExpenseDto, ['clientId'] as const), { skipNullProperties: false }) {}
 
 export class ListExpensesQueryDto {
   @ApiPropertyOptional({ enum: ExpenseCategory })

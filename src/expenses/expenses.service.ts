@@ -185,6 +185,8 @@ export class ExpensesService {
     let id: string;
     try {
       id = await this.dataSource.transaction(async (manager) => {
+        // Serialize with group currency changes before introducing any money rows.
+        await manager.findOneOrFail(Group, { where: { id: groupId }, lock: { mode: 'pessimistic_write' } });
         const saved = await manager.save(
           manager.create(Expense, {
             groupId,
@@ -595,8 +597,9 @@ export class ExpensesService {
       );
     }
 
-    const saved = await this.settlements.save(
-      this.settlements.create({
+    const saved = await this.dataSource.transaction(async (manager) => {
+      await manager.findOneOrFail(Group, { where: { id: groupId }, lock: { mode: 'pessimistic_write' } });
+      return manager.save(manager.create(ExpenseSettlement, {
         groupId,
         fromUserId,
         toUserId: dto.toUserId,
@@ -604,8 +607,8 @@ export class ExpensesService {
         paidOn: dto.date ?? today(),
         note: dto.note?.trim() || null,
         createdById: actor.userId,
-      }),
-    );
+      }));
+    });
     const view = await this.getSettlement(groupId, actor, saved.id);
     await this.announce(
       groupId,

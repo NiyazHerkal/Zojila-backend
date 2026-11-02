@@ -6,4 +6,4 @@ import { CreateWaypointDto } from './create-waypoint.dto.js';
  * Moving the pin (lat/lng) clears address and providerPlaceId unless new ones are sent.
  * Use the order endpoint to move a pin within the route.
  */
-export class UpdateWaypointDto extends PartialType(OmitType(CreateWaypointDto, ['position'] as const)) {}
+export class UpdateWaypointDto extends PartialType(OmitType(CreateWaypointDto, ['position'] as const), { skipNullProperties: false }) {}
